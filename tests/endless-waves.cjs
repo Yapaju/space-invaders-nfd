@@ -6,13 +6,26 @@ const vm = require('vm');
 const ts = require('typescript');
 
 class Sprite {
-    constructor(scene) { this.scene = scene; this.active = true; }
+    constructor(scene, x = 0, y = 0) {
+        Object.assign(this, { scene, active: true, x, y, width: 32, height: 32 });
+        this.body = { reset: (x, y) => {
+            this.setPosition(x, y);
+            this.collisionX = x;
+            this.collisionY = y;
+        } };
+    }
     disableBody() { this.active = false; return this; }
     enableBody(reset, x, y) { this.active = true; this.x = x; this.y = y; return this; }
     setVelocity(x, y) { this.velocityX = x; this.velocityY = y; return this; }
     setVelocityX(x) { this.velocityX = x; return this; }
     setVelocityY(y) { this.velocityY = y; return this; }
     setPosition(x, y) { this.x = x; this.y = y; return this; }
+    setOrigin() { return this; }
+    setImmovable() { return this; }
+    getBounds() {
+        return { left: this.x - this.width / 2, right: this.x + this.width / 2,
+            top: this.y - this.height / 2, bottom: this.y + this.height / 2 };
+    }
     setX(x) { this.x = x; return this; }
     setY(y) { this.y = y; return this; }
     play() { return this; }
@@ -80,14 +93,18 @@ scene.assetManager = {
         Object.assign(bullet, { width: 4, height: 8 });
         transitionBullets.push(bullet);
         return bullet;
-    }, countActive: () => transitionBullets.filter(bullet => bullet.active).length },
+    }, countActive: () => transitionBullets.filter(bullet => bullet.active).length,
+    getChildren: () => transitionBullets },
     enemyBullets: { clear() { assert(!inOverlap); enemyClearCount++; } },
     explosions: { get: () => new Sprite(scene) },
     gameOver() { assert(!inOverlap); clearCount++; transitionBullets = []; },
     reset() { assert(!inOverlap); clearCount++; transitionBullets = []; }
 };
 let alive = 40;
+let movementUpdates = 0;
 scene.alienManager = {
+    aliens: { getChildren: () => [] },
+    update() { movementUpdates++; return false; },
     get hasAliveAliens() { return alive > 0; },
     stopMovement() { stopCount++; },
     reset(wave) {
@@ -105,7 +122,7 @@ scene.physics = {
     world: { bounds: { left: 0, right: 800, top: 0, bottom: 600 } },
     overlap(group) {
     inOverlap = true;
-    if (group === scene.assetManager.bullets) {
+    if (group === scene.assetManager.bullets.getChildren()) {
         for (let i = 0; i < 40; i++) {
             const bullet = new Sprite(scene);
             const alien = new Alien(scene, 0, 0);
@@ -154,11 +171,13 @@ scene.cursors = { left: { isDown: true }, right: { isDown: false } };
 scene.fireKey = { isDown: true };
 scene._shipKeyboardHandler = MainScene.prototype._shipKeyboardHandler;
 const combatOverlap = scene.physics.overlap;
+const updatesBeforeTransition = movementUpdates;
 scene.physics.overlap = () => assert.fail('no collision iteration during transition');
 scene.update();
 assert(scene.player.active);
 assert.equal(scene.player.velocityX, -200);
 assert.equal(transitionBullets.length, 3);
+assert.equal(movementUpdates, updatesBeforeTransition, 'formation does not move during transitions');
 scene.cursors.left.isDown = false;
 scene.cursors.right.isDown = true;
 scene.time.now = 200;
@@ -299,13 +318,211 @@ children = [children[0]];
 assert.strictEqual(manager.getRandomAliveEnemy(), children[0]);
 children = [];
 assert.equal(manager.getRandomAliveEnemy(), undefined);
-let durations = [];
-children = [{}];
-manager._scene = { tweens: { add: config => durations.push(config.duration) } };
-[1, 2, 1000].forEach(wave => manager._animate(wave));
-assert.equal(durations[0], 2000);
-assert.equal(durations[1], 2000 / 1.1);
-assert.equal(durations[2], 600);
+
+// Exercise the actual formation controller with a minimal Arcade group.
+class FormationGroup {
+    constructor(scene, config) { this.scene = scene; this.config = config; this.maxSize = config.maxSize; this.children = []; }
+    setOrigin() {}
+    getChildren() { return this.children; }
+    countActive() { return this.children.filter(child => child.active).length; }
+    clear() { this.children.forEach(child => child.destroy()); this.children = []; }
+    create(x, y) {
+        const alien = new this.config.classType(this.scene, x, y);
+        this.children.push(alien);
+        return alien;
+    }
+}
+const formationScene = {
+    physics: {
+        world: { bounds: { left: 0, right: 800 } },
+        add: { group: config => new FormationGroup(formationScene, config) }
+    },
+    tweens: { add() { assert.fail('formation must not use independent tweens'); } }
+};
+const formation = new AlienManager(formationScene);
+const near = (actual, expected) => assert(Math.abs(actual - expected) < 1e-7, `${actual} != ${expected}`);
+const survivors = () => formation.aliens.getChildren().filter(alien => alien.active);
+const assertInside = () => survivors().forEach(alien => {
+    assert(alien.getBounds().left >= -1e-7 && alien.getBounds().right <= 800 + 1e-7);
+    near(alien.collisionX, alien.x);
+    near(alien.collisionY, alien.y);
+});
+assert.equal(survivors().length, 40);
+assert.equal(formation.rowSpacing, 50);
+const descent = formation.rowSpacing / 2;
+const originalPositions = survivors().map(alien => [alien.x, alien.y]);
+formation.update(1000, 10000);
+survivors().forEach((alien, i) => {
+    near(alien.x, originalPositions[i][0] + 100);
+    near(alien.y, originalPositions[i][1]);
+});
+assertInside();
+// Reach right edge exactly (initial right edge 548 + 100 + 152 = 800).
+formation.update(1520, 10000);
+survivors().forEach((alien, i) => {
+    near(alien.x, originalPositions[i][0] + 252);
+    near(alien.y, originalPositions[i][1] + descent);
+});
+formation.update(10, 10000);
+survivors().forEach((alien, i) => {
+    near(alien.x, originalPositions[i][0] + 251);
+    near(alien.y, originalPositions[i][1] + descent);
+});
+assertInside();
+// Empty outer columns change the next boundary, without repacking survivors.
+formation.reset();
+formation.aliens.getChildren().forEach((alien, i) => {
+    if (i % 10 === 0 || i % 10 === 9) alien.active = false;
+});
+const sparsePositions = survivors().map(alien => [alien.x, alien.y]);
+const sparseMultiplier = 1 + 0.5 * (40 - survivors().length) / 39;
+formation.update(2990 / sparseMultiplier, 10000);
+assert.equal(formation.direction, 1);
+near(Math.max(...survivors().map(alien => alien.getBounds().right)), 799);
+formation.update(10 / sparseMultiplier, 10000);
+assert.equal(formation.direction, -1);
+survivors().forEach((alien, i) => {
+    near(alien.x, sparsePositions[i][0] + 300);
+    near(alien.y, sparsePositions[i][1] + descent);
+});
+// Empty rows stay empty, and gaps inside the formation remain unchanged.
+formation.reset();
+formation.aliens.getChildren().forEach((alien, i) => {
+    if (i < 10 || (i >= 20 && i < 30) || i % 10 === 4) alien.active = false;
+});
+const gappedPositions = survivors().map(alien => [alien.x, alien.y]);
+const gappedMultiplier = 1 + 0.5 * (40 - survivors().length) / 39;
+formation.update(2520 / gappedMultiplier, 10000);
+survivors().forEach((alien, i) => {
+    near(alien.x, gappedPositions[i][0] + 252);
+    near(alien.y, gappedPositions[i][1] + descent);
+});
+// A lone survivor travels between centers 16 and 784, descending once at each end.
+formation.reset();
+formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
+const lone = survivors()[0];
+formation.update(6840 / 1.5, 10000);
+near(lone.x, 784); near(lone.y, 100 + descent);
+formation.update(7680 / 1.5, 10000);
+near(lone.x, 16); near(lone.y, 100 + descent * 2);
+assert.equal(formation.direction, 1);
+formation.update(10, 10000);
+near(lone.x, 17.5); near(lone.y, 100 + descent * 2);
+assertInside();
+// Frame splitting does not change the result, even when crossing several edges.
+formation.reset(1000);
+formation.update(10000, 10000);
+assertInside();
+survivors().forEach(alien => near(alien.y,
+    originalPositions[formation.aliens.getChildren().indexOf(alien)][1] + descent * 10));
+const longFrame = survivors().map(alien => [alien.x, alien.y]);
+formation.reset(1000);
+for (let i = 0; i < 100; i++) formation.update(100, 10000);
+survivors().forEach((alien, i) => {
+    near(alien.x, longFrame[i][0]); near(alien.y, longFrame[i][1]);
+});
+assertInside();
+[1, 2, 1000].forEach(wave => {
+    formation.reset(wave);
+    const x = survivors()[0].x;
+    formation.update(100, 10000);
+    near(survivors()[0].x - x, 200 / (Math.max(600, 2000 / (1 + 0.10 * (wave - 1))) / 1000) * 0.1);
+});
+// Check every survivor count against the wave's starting speed, including the cap.
+[1, 2, 1000].forEach(wave => {
+    const baseSpeed = 200 / (Math.max(600, 2000 / (1 + 0.10 * (wave - 1))) / 1000);
+    let previousSpeed = 0;
+    for (let count = 40; count >= 1; count--) {
+        formation.reset(wave);
+        formation.aliens.getChildren().forEach((alien, i) => { alien.active = i < count; });
+        const before = survivors().map(alien => [alien.x, alien.y]);
+        formation.update(100, 10000);
+        const measuredSpeed = (survivors()[0].x - before[0][0]) / 0.1;
+        near(measuredSpeed, baseSpeed * (1 + 0.5 * (40 - count) / 39));
+        assert(measuredSpeed >= previousSpeed - 1e-7);
+        assert(measuredSpeed <= baseSpeed * 1.5 + 1e-7);
+        if (count === 40) near(measuredSpeed, baseSpeed);
+        if (count === 1) near(measuredSpeed, baseSpeed * 1.5);
+        survivors().forEach((alien, i) => {
+            near(alien.x - before[i][0], measuredSpeed * 0.1);
+            near(alien.y, before[i][1]);
+        });
+        // Repeated updates must not compound the multiplier.
+        formation.update(100, 10000);
+        near(survivors()[0].x - before[0][0], measuredSpeed * 0.2);
+        previousSpeed = measuredSpeed;
+    }
+    // Starting another wave resets survivor acceleration to its normal speed.
+    formation.reset(wave + 1);
+    const x = survivors()[0].x;
+    const nextWaveSpeed = 200 / (Math.max(600, 2000 / (1 + 0.10 * wave)) / 1000);
+    formation.update(100, 10000);
+    near(survivors()[0].x - x, nextWaveSpeed * 0.1);
+});
+// Changing survivor count mid-flight retains current positions and leftward direction.
+formation.reset();
+formation.update(2520, 10000);
+formation.aliens.getChildren().forEach((alien, i) => { alien.active = i % 2 === 0; });
+const acceleratingPositions = survivors().map(alien => [alien.x, alien.y]);
+formation.update(0, 10000);
+assert.equal(formation.direction, -1);
+survivors().forEach((alien, i) => {
+    near(alien.x, acceleratingPositions[i][0]); near(alien.y, acceleratingPositions[i][1]);
+});
+formation.update(100, 10000);
+survivors().forEach((alien, i) => {
+    near(alien.x, acceleratingPositions[i][0] - 10 * (1 + 0.5 * 20 / 39));
+    near(alien.y, acceleratingPositions[i][1]);
+});
+assert.equal(formation.direction, -1);
+const stoppedPositions = survivors().map(alien => [alien.x, alien.y]);
+formation.stopMovement();
+assert.equal(formation.update(10000, 10000), false);
+survivors().forEach((alien, i) => {
+    near(alien.x, stoppedPositions[i][0]); near(alien.y, stoppedPositions[i][1]);
+});
+formation.reset();
+assert.equal(formation.direction, 1);
+assert.equal(formation.movementStopped, false);
+assert.equal(formation.speed, 100);
+assert.equal(survivors().length, 40);
+// Equality at the defensive line triggers invasion even without a descent.
+formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
+survivors()[0].body.reset(100, scene.player.getBounds().top - 16);
+assert.equal(formation.update(0, scene.player.getBounds().top), true);
+assert.equal(formation.movementStopped, true);
+formation.reset();
+// Inactive invaders cannot cause invasion. Reaching the line needs no horizontal overlap.
+formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
+formation.aliens.getChildren()[1].y = 1000;
+const invader = survivors()[0];
+invader.body.reset(784, scene.player.getBounds().top - 17);
+assert.equal(formation.update(0, scene.player.getBounds().top), false);
+scene.alienManager = formation;
+scene.physics.overlap = () => assert.fail('invasion ends combat before collision checks');
+scene._shipKeyboardHandler = () => assert.fail('invasion ends combat before input/shooting');
+const livesBeforeInvasion = score.remaining;
+scene.update(0, 20);
+assert.equal(scene.state, GameState.GameOver);
+assert.equal(score.remaining, livesBeforeInvasion);
+assert.equal(score.remaining, 3);
+assert.equal(score.message, 'GAME OVER');
+assert(!scene.player.active);
+assert.equal(formation.movementStopped, true);
+const invadedY = invader.y;
+formation.update(1000, 0);
+scene.update(1000, 1000);
+assert.equal(invader.y, invadedY);
+scene._enemyFires(); scene._fireBullet();
+scene.restart();
+assert.equal(scene.state, GameState.Playing);
+assert.equal(scene.wave, 1);
+assert.equal(score.score, 0);
+assert.equal(score.remaining, 3);
+assert.equal(survivors().length, 40);
+assert.equal(formation.direction, 1);
+assert.equal(formation.movementStopped, false);
+assert.equal(score.message, '');
 
 const assets = Object.create(AssetManager.prototype);
 let cleared = 0;
@@ -324,4 +541,4 @@ for (const Type of [Bullet, EnemyBullet]) {
         assert.equal(!!bullet.destroyed, x !== 400 || y !== 300);
     }
 }
-console.log('PASS: minimum wave delay, announcement lifecycle, natural missile cleanup, movement, held-Space resumption, combat guards, no duplicate spawns, scoring, lives, restart, speed cap, selection, and group reuse.');
+console.log('PASS: coordinated movement, dynamic edges, row descent, lone invader, long frames, invasion/game-over, restart, wave scaling, and all v0.1 wave-transition regressions.');

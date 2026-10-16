@@ -78,7 +78,7 @@ export class MainScene extends Phaser.Scene {
         })
     }
 
-    update() {
+    update(time?: number, delta = 0) {
         this.starfield.tilePositionY -= 1;
         if (this.state === GameState.GameOver) {
             this.player.setVelocity(0, 0);
@@ -86,6 +86,12 @@ export class MainScene extends Phaser.Scene {
         }
         if (this.state === GameState.WaveTransition) {
             this._startNextWave();
+        }
+        if (this.state === GameState.Playing &&
+            this.alienManager.update(delta, this.player.getBounds().top)) {
+            this._gameOver();
+            this.assetManager.gameOver();
+            return;
         }
         this._shipKeyboardHandler();
         if (this.state === GameState.WaveTransition) {
@@ -96,8 +102,10 @@ export class MainScene extends Phaser.Scene {
         }
 
         this.physics.overlap(
-            this.assetManager.bullets,
-            this.alienManager.aliens,
+            // Check the small formation directly: its bodies have just moved,
+            // after Arcade's spatial index was built for this frame.
+            this.assetManager.bullets.getChildren(),
+            this.alienManager.aliens.getChildren(),
             this._bulletHitAliens,
             null,
             this
@@ -172,14 +180,17 @@ export class MainScene extends Phaser.Scene {
         explosion.play(AnimationType.Kaboom);
         this.sound.play(SoundType.Kaboom)
         if (this.scoreManager.noMoreLives) {
-            this.scoreManager.setGameOverText();
-            this.state = GameState.GameOver;
-            this.player.disableBody(true, true);
-            this.pendingCleanup.push(() => {
-                this.assetManager.gameOver();
-                this.alienManager.stopMovement();
-            });
+            this._gameOver();
+            this.pendingCleanup.push(() => this.assetManager.gameOver());
         }
+    }
+
+    private _gameOver() {
+        this.state = GameState.GameOver;
+        this.scoreManager.setGameOverText();
+        this.player.setVelocity(0, 0);
+        this.player.disableBody(true, true);
+        this.alienManager.stopMovement();
     }
 
     private _enemyFires() {

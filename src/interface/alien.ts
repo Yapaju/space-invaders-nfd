@@ -15,7 +15,6 @@ export class Alien extends Phaser.Physics.Arcade.Sprite {
       this.scene.sound.play(SoundType.InvaderKilled)
     }
     // Remove from play immediately; the scene destroys it after overlap iteration.
-    this.scene.tweens.killTweensOf(this);
     this.disableBody(true, true);
   }
 }
