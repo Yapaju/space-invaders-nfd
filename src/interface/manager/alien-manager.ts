@@ -1,5 +1,5 @@
 import { Alien } from "../alien";
-import { AnimationType } from "../factory/animation-factory";
+import { applySkin, MemeSkins } from "../skins";
 
 export class AlienManager {
     aliens: Phaser.Physics.Arcade.Group;
@@ -50,7 +50,7 @@ export class AlienManager {
         if (this.movementStopped || !aliens.length) {
             return false;
         }
-        const reachedPlayer = () => aliens.some(alien => alien.getBounds().bottom >= defensiveLine);
+        const reachedPlayer = () => aliens.some(alien => (alien.body as Phaser.Physics.Arcade.Body).bottom >= defensiveLine);
         if (reachedPlayer()) {
             this.stopMovement();
             return true;
@@ -87,7 +87,10 @@ export class AlienManager {
     private _move(aliens: Alien[], x: number, y: number) {
         aliens.forEach(alien => {
             // Keep Arcade collision bounds in sync with the visible formation.
-            (alien.body as Phaser.Physics.Arcade.Body).reset(alien.x + x, alien.y + y);
+            const body = alien.body as Phaser.Physics.Arcade.Body;
+            body.reset(alien.x + x, alien.y + y);
+            // Phaser 3.22 reset() ignores custom offsets until preUpdate.
+            body.preUpdate(false, 0);
         });
     }
 
@@ -98,8 +101,7 @@ export class AlienManager {
         for (let y = 0; y < 4; y++) {
             for (let x = 0; x < 10; x++) {
                 let alien: Alien = this.aliens.create(ORIGIN_X + x * 48, ORIGIN_Y + y * this.rowSpacing);
-                alien.setOrigin(0.5, 0.5);
-                alien.play(AnimationType.Fly)
+                applySkin(alien, MemeSkins.Invader);
                 alien.setImmovable(false);
             }
         }

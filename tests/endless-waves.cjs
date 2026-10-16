@@ -5,10 +5,29 @@ const path = require('path');
 const vm = require('vm');
 const ts = require('typescript');
 
+const testDocument = { createElement() {
+    let image;
+    return { getContext: () => ({
+        drawImage(source) { image = source; },
+        getImageData: () => ({ data: image.pixels })
+    }) };
+} };
+
 class Sprite {
-    constructor(scene, x = 0, y = 0) {
-        Object.assign(this, { scene, active: true, x, y, width: 32, height: 32 });
-        this.body = { reset: (x, y) => {
+    constructor(scene, x = 0, y = 0, texture) {
+        const size = texture === 'alien' ? [337, 282] : texture === 'ship' ? [335, 320] : [32, 32];
+        Object.assign(this, { scene, active: true, x, y, width: size[0], height: size[1],
+            texture: { key: texture || 'ship' }, textureChanges: 0,
+            originX: 0.5, originY: 0.5, scaleX: 1, scaleY: 1 });
+        const sprite = this;
+        this.body = {
+            sourceWidth: size[0], sourceHeight: size[1], offsetX: 0, offsetY: 0,
+            setSize(width, height) { this.sourceWidth = width; this.sourceHeight = height; },
+            setOffset(x, y) { this.offsetX = x; this.offsetY = y; },
+            preUpdate() {},
+            get top() { return sprite.y + sprite.scaleY * (this.offsetY - sprite.originY * sprite.height); },
+            get bottom() { return this.top + this.sourceHeight * sprite.scaleY; },
+            reset: (x, y) => {
             this.setPosition(x, y);
             this.collisionX = x;
             this.collisionY = y;
@@ -20,11 +39,19 @@ class Sprite {
     setVelocityX(x) { this.velocityX = x; return this; }
     setVelocityY(y) { this.velocityY = y; return this; }
     setPosition(x, y) { this.x = x; this.y = y; return this; }
-    setOrigin() { return this; }
+    setTexture(key) { this.texture.key = key; this.textureChanges++; return this; }
+    setOrigin(x, y = x) { this.originX = x; this.originY = y; return this; }
+    setDisplaySize(width, height) { this.scaleX = width / this.width; this.scaleY = height / this.height; return this; }
+    preUpdate() {}
+    get top() { return this.getBounds().top; }
+    get displayOriginX() { return this.originX * this.width; }
+    get displayOriginY() { return this.originY * this.height; }
     setImmovable() { return this; }
     getBounds() {
-        return { left: this.x - this.width / 2, right: this.x + this.width / 2,
-            top: this.y - this.height / 2, bottom: this.y + this.height / 2 };
+        const left = this.x - this.width * this.scaleX * this.originX;
+        const top = this.y - this.height * this.scaleY * this.originY;
+        return { left, right: left + this.width * this.scaleX,
+            top, bottom: top + this.height * this.scaleY };
     }
     setX(x) { this.x = x; return this; }
     setY(y) { this.y = y; return this; }
@@ -46,7 +73,7 @@ function load(relative) {
         compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2015 }
     }).outputText;
     vm.runInNewContext(code, {
-        module, exports: module.exports, Phaser,
+        module, exports: module.exports, Phaser, document: testDocument,
         require: name => load(path.relative(path.resolve(__dirname, '..'),
             path.resolve(path.dirname(filename), name + '.ts')))
     }, { filename });
@@ -60,6 +87,199 @@ const { AssetManager } = load('src/interface/manager/asset-manager.ts');
 const { Bullet } = load('src/interface/bullet.ts');
 const { EnemyBullet } = load('src/interface/enemy-bullet.ts');
 const { Alien } = load('src/interface/alien.ts');
+const { MemeSkins, PlayerPoses, PlayerCanvas, visibleImageBounds, preparePlayerPoses, applySkin, applySkinAppearance } = load('src/interface/skins.ts');
+const { Ship } = load('src/interface/ship.ts');
+
+// Skin textures are standalone PNGs, with collision boxes inside their artwork.
+const textureRequests = [];
+const preloadScene = new MainScene();
+preloadScene.sound = {};
+preloadScene.load = {
+    setBaseURL(url) { this.baseURL = url; },
+    image(asset, url) { textureRequests.push({ asset, url }); },
+    spritesheet(asset, url) { assert.equal(asset, 'kaboom', 'only explosions use a sprite sheet'); },
+    audio() {}
+};
+preloadScene.preload();
+for (const skin of Object.values(MemeSkins)) {
+    const asset = skin === MemeSkins.Player ? `${skin.asset}-source` : skin.asset;
+    assert(textureRequests.some(request => request.asset === asset && request.url === skin.path));
+    const png = fs.readFileSync(path.resolve(__dirname, '../assets', skin.path));
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    const width = skin === MemeSkins.Player ? PlayerCanvas.width : png.readUInt32BE(16);
+    const height = skin === MemeSkins.Player ? PlayerCanvas.height : png.readUInt32BE(20);
+    assert(skin.hitbox.x >= 0 && skin.hitbox.y >= 0);
+    assert(skin.hitbox.x + skin.hitbox.width <= width);
+    assert(skin.hitbox.y + skin.hitbox.height <= height);
+    const sprite = new Sprite({}, 400, 500, skin.asset);
+    applySkin(sprite, skin);
+    nearSkin(sprite.getBounds().right - sprite.getBounds().left, skin.displayWidth);
+    nearSkin(sprite.scaleX, sprite.scaleY);
+    nearSkin(sprite.body.bottom - sprite.body.top, skin.hitbox.height * sprite.scaleY);
+    assert(sprite.body.top > sprite.getBounds().top);
+    assert(sprite.body.bottom < sprite.getBounds().bottom, 'glow/thrusters excluded from collisions');
+}
+function nearSkin(actual, expected) { assert(Math.abs(actual - expected) < 1e-7); }
+const lifeIcon = new Sprite({}, 0, 0, 'ship');
+applySkinAppearance(lifeIcon, MemeSkins.Player, 24);
+nearSkin(lifeIcon.getBounds().right - lifeIcon.getBounds().left, 24);
+assert(textureRequests.every(request => !request.url.startsWith('/')));
+assert.equal(preloadScene.load.baseURL, 'assets/');
+
+// High-resolution replacements have transparent pixels in the old crop regions.
+// Locate visible pixels dynamically and normalize all five poses to a fixed canvas.
+const sourceImages = new Map();
+for (const pose of PlayerPoses) {
+    const png = fs.readFileSync(path.resolve(__dirname, '../assets', pose.path));
+    const width = png.readUInt32BE(16), height = png.readUInt32BE(20);
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    const bounds = { x: Math.floor(width * 0.25), y: Math.floor(height * 0.25),
+        width: Math.floor(width * 0.5), height: Math.floor(height * 0.5) };
+    for (let y = bounds.y; y < bounds.y + bounds.height; y++) {
+        for (let x = bounds.x; x < bounds.x + bounds.width; x++) {
+            pixels[(y * width + x) * 4 + 3] = 255;
+        }
+    }
+    pixels[3] = 1; // Faint glow at the canvas edge should not affect fitting.
+    sourceImages.set(`${pose.asset}-source`, { width, height, pixels, bounds });
+    assert.deepEqual(visibleImageBounds(pixels, width, height), bounds);
+}
+assert.throws(() => visibleImageBounds(new Uint8ClampedArray(16), 2, 2), /no visible artwork/);
+const prepared = new Map();
+const poseScene = { textures: {
+    exists: key => prepared.has(key) || sourceImages.has(key),
+    get: key => ({ getSourceImage: () => sourceImages.get(key) }),
+    createCanvas(key, width, height) {
+        const texture = { width, height, draws: [], refreshes: 0,
+            context: { drawImage(...args) { texture.draws.push(args); } },
+            refresh() { texture.refreshes++; }
+        };
+        prepared.set(key, texture);
+        return texture;
+    }
+} };
+preparePlayerPoses(poseScene);
+preparePlayerPoses(poseScene);
+assert.throws(() => preparePlayerPoses({ textures: { exists: () => false } }), /Missing DOGE pose texture/);
+assert.equal(prepared.size, 5);
+for (const pose of PlayerPoses) {
+    assert(textureRequests.some(request => request.asset === `${pose.asset}-source` && request.url === pose.path));
+    const png = fs.readFileSync(path.resolve(__dirname, '../assets', pose.path));
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    const image = sourceImages.get(`${pose.asset}-source`);
+    const texture = prepared.get(pose.asset);
+    assert.equal(texture.width, 335); assert.equal(texture.height, 320);
+    assert.equal(texture.draws.length, 1); assert.equal(texture.refreshes, 1);
+    const draw = texture.draws[0];
+    assert.strictEqual(draw[0], image);
+    assert.deepEqual(draw.slice(1, 5), Object.values(image.bounds));
+    assert(image.pixels[(draw[2] * image.width + draw[1]) * 4 + 3] > 0, 'crop contains visible artwork');
+    const [x, y, width, height] = draw.slice(5);
+    assert(x >= 0 && y >= 0 && x + width <= 335 + 1e-7 && y + height <= 320 + 1e-7);
+    nearSkin(width / height, image.bounds.width / image.bounds.height);
+    nearSkin(x + width / 2, MemeSkins.Player.originX * PlayerCanvas.width);
+    nearSkin(y + height * MemeSkins.Player.originY, MemeSkins.Player.originY * PlayerCanvas.height);
+}
+
+// Use the installed Phaser Body to verify scaled offsets and no post-update drift.
+const ArcadeBody = require('phaser/src/physics/arcade/Body');
+for (const skin of Object.values(MemeSkins)) {
+    const sprite = new Sprite({}, 400, 500, skin.asset);
+    sprite.angle = 0;
+    sprite.body = new ArcadeBody({ defaults: {}, bounds: {} }, sprite);
+    applySkin(sprite, skin);
+    for (let i = 0; i < 40; i++) {
+        sprite.body.reset(400 + i, 500 + i);
+        sprite.body.preUpdate(false, 0);
+        nearSkin(sprite.body.left, sprite.getBounds().left + skin.hitbox.x * sprite.scaleX);
+        nearSkin(sprite.body.top, sprite.getBounds().top + skin.hitbox.y * sprite.scaleY);
+        nearSkin(sprite.body.width, skin.hitbox.width * sprite.scaleX);
+        nearSkin(sprite.body.height, skin.hitbox.height * sprite.scaleY);
+        sprite.body.postUpdate();
+        nearSkin(sprite.x, 400 + i); nearSkin(sprite.y, 500 + i);
+    }
+}
+
+// Texture switches leave real Phaser collision geometry, position and velocity alone.
+const directionalPlayer = new Sprite({}, 400, 500, 'ship');
+directionalPlayer.angle = 0;
+directionalPlayer.body = new ArcadeBody({ defaults: {}, bounds: {} }, directionalPlayer);
+applySkin(directionalPlayer, MemeSkins.Player);
+directionalPlayer.body.velocity.set(200, 0);
+const stablePlayerState = () => [directionalPlayer.x, directionalPlayer.y,
+    directionalPlayer.scaleX, directionalPlayer.scaleY, directionalPlayer.originX, directionalPlayer.originY,
+    directionalPlayer.body.left, directionalPlayer.body.top, directionalPlayer.body.width, directionalPlayer.body.height,
+    directionalPlayer.body.velocity.x, directionalPlayer.body.velocity.y];
+const initialPlayerState = stablePlayerState();
+for (const [direction, key, now] of [
+    [-1, 'ship-left', 0], [1, 'ship-turn-right', 10], [1, 'ship-right', 43],
+    [-1, 'ship-turn-left', 150], [-1, 'ship-left', 183], [0, 'ship', 184]
+]) {
+    Ship.setDirection(directionalPlayer, direction, now);
+    assert.equal(directionalPlayer.texture.key, key);
+    assert.deepEqual(stablePlayerState(), initialPlayerState);
+    const switches = directionalPlayer.textureChanges;
+    Ship.setDirection(directionalPlayer, direction, now);
+    assert.equal(directionalPlayer.textureChanges, switches, 'do not reapply unchanged textures every frame');
+}
+// Exercise the actual input handler, including left-key precedence and shooting origin.
+const inputScene = new MainScene();
+inputScene.player = directionalPlayer;
+inputScene.cursors = { left: { isDown: false }, right: { isDown: false } };
+inputScene.fireKey = { isDown: true };
+inputScene.state = GameState.Playing;
+inputScene.time = { now: 1000 };
+let shotOrigin;
+inputScene.assetManager = { bullets: { get: () => ({ shoot(x, y) { shotOrigin = [x, y]; } }) } };
+for (const [left, right, key, velocity] of [
+    [true, false, 'ship-left', -200], [false, true, 'ship-turn-right', 200],
+    [false, false, 'ship', 0], [true, true, 'ship-left', -200]
+]) {
+    inputScene.cursors.left.isDown = left; inputScene.cursors.right.isDown = right;
+    inputScene.time.now += 201;
+    inputScene._shipKeyboardHandler();
+    assert.equal(directionalPlayer.texture.key, key);
+    assert.equal(directionalPlayer.body.velocity.x, velocity);
+    assert.deepEqual(shotOrigin, [400, 482], 'poses must not move the projectile origin');
+    assert.equal(directionalPlayer.x, 400); assert.equal(directionalPlayer.y, 500);
+}
+
+// Consecutive resolved movement, not key-press history, controls reversal poses.
+function drive(now, left, right, key) {
+    inputScene.time.now = now;
+    inputScene.cursors.left.isDown = left; inputScene.cursors.right.isDown = right;
+    inputScene._shipKeyboardHandler();
+    assert.equal(directionalPlayer.texture.key, key);
+    assert.equal(directionalPlayer.body.velocity.x, left ? -200 : right ? 200 : 0);
+    assert.equal(directionalPlayer.x, 400); assert.equal(directionalPlayer.y, 500);
+    assert.deepEqual(shotOrigin, [400, 482]);
+}
+drive(2000, false, false, 'ship');
+drive(2010, true, false, 'ship-left');
+drive(2020, false, false, 'ship');
+drive(2030, false, true, 'ship-right');
+drive(2040, false, false, 'ship');
+drive(2050, true, false, 'ship-left');
+drive(2060, false, true, 'ship-turn-right');
+drive(2092, false, true, 'ship-turn-right'); // 32 ms: still turning.
+drive(2093, false, true, 'ship-right');      // 33 ms: normal movement pose.
+drive(2200, true, false, 'ship-turn-left');
+drive(2232, true, false, 'ship-turn-left');
+drive(2233, true, false, 'ship-left');
+// Rapid reversals replace the current visual transition without queuing callbacks.
+drive(2340, false, true, 'ship-turn-right');
+drive(2360, true, false, 'ship-turn-left');
+drive(2380, false, true, 'ship-turn-right');
+drive(2410, false, true, 'ship-turn-right'); // Old deadlines cannot override the newest turn.
+drive(2413, false, true, 'ship-right');
+drive(2520, true, false, 'ship-turn-left');
+drive(2530, false, false, 'ship');           // Stopping cancels immediately.
+drive(2700, false, false, 'ship');           // No stale turn completion.
+drive(2710, false, true, 'ship-right');      // Idle breaks the reversal chain.
+drive(2720, true, true, 'ship-turn-left');   // Existing left-key precedence is preserved.
+drive(2740, true, false, 'ship-turn-left');  // Releasing right does not restart this turn.
+drive(2753, true, false, 'ship-left');
+drive(2850, false, false, 'ship');
 
 const scene = new MainScene();
 scene.state = GameState.Playing;
@@ -292,6 +512,7 @@ assert.equal(scene.wave, 1);
 assert.equal(score.score, 0);
 assert.equal(score.remaining, 3);
 assert.equal(score.waveLabel, 'WAVE 1');
+assert.equal(scene.player.texture.key, 'ship', 'a fresh game starts in the idle pose');
 assert.equal(score.message, '');
 assert.equal(scene.nextWaveReadyAt, 0);
 assert.equal(scene.player.x, 400);
@@ -357,15 +578,16 @@ survivors().forEach((alien, i) => {
     near(alien.y, originalPositions[i][1]);
 });
 assertInside();
-// Reach right edge exactly (initial right edge 548 + 100 + 152 = 800).
-formation.update(1520, 10000);
+// Reach the right edge using the current skin's visual bounds.
+const rightTravel = 800 - (originalPositions[9][0] + survivors()[9].width * survivors()[9].scaleX / 2);
+formation.update((rightTravel - 100) * 10, 10000);
 survivors().forEach((alien, i) => {
-    near(alien.x, originalPositions[i][0] + 252);
+    near(alien.x, originalPositions[i][0] + rightTravel);
     near(alien.y, originalPositions[i][1] + descent);
 });
 formation.update(10, 10000);
 survivors().forEach((alien, i) => {
-    near(alien.x, originalPositions[i][0] + 251);
+    near(alien.x, originalPositions[i][0] + rightTravel - 1);
     near(alien.y, originalPositions[i][1] + descent);
 });
 assertInside();
@@ -376,13 +598,14 @@ formation.aliens.getChildren().forEach((alien, i) => {
 });
 const sparsePositions = survivors().map(alien => [alien.x, alien.y]);
 const sparseMultiplier = 1 + 0.5 * (40 - survivors().length) / 39;
-formation.update(2990 / sparseMultiplier, 10000);
+const sparseTravel = 800 - Math.max(...survivors().map(alien => alien.getBounds().right));
+formation.update((sparseTravel - 1) * 10 / sparseMultiplier, 10000);
 assert.equal(formation.direction, 1);
 near(Math.max(...survivors().map(alien => alien.getBounds().right)), 799);
 formation.update(10 / sparseMultiplier, 10000);
 assert.equal(formation.direction, -1);
 survivors().forEach((alien, i) => {
-    near(alien.x, sparsePositions[i][0] + 300);
+    near(alien.x, sparsePositions[i][0] + sparseTravel);
     near(alien.y, sparsePositions[i][1] + descent);
 });
 // Empty rows stay empty, and gaps inside the formation remain unchanged.
@@ -392,22 +615,23 @@ formation.aliens.getChildren().forEach((alien, i) => {
 });
 const gappedPositions = survivors().map(alien => [alien.x, alien.y]);
 const gappedMultiplier = 1 + 0.5 * (40 - survivors().length) / 39;
-formation.update(2520 / gappedMultiplier, 10000);
+formation.update(rightTravel * 10 / gappedMultiplier, 10000);
 survivors().forEach((alien, i) => {
-    near(alien.x, gappedPositions[i][0] + 252);
+    near(alien.x, gappedPositions[i][0] + rightTravel);
     near(alien.y, gappedPositions[i][1] + descent);
 });
-// A lone survivor travels between centers 16 and 784, descending once at each end.
+// A lone survivor traverses the playable width minus its visual width.
 formation.reset();
 formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
 const lone = survivors()[0];
-formation.update(6840 / 1.5, 10000);
-near(lone.x, 784); near(lone.y, 100 + descent);
-formation.update(7680 / 1.5, 10000);
-near(lone.x, 16); near(lone.y, 100 + descent * 2);
+const halfWidth = lone.width * lone.scaleX / 2;
+formation.update((800 - halfWidth - lone.x) * 10 / 1.5, 10000);
+near(lone.x, 800 - halfWidth); near(lone.y, 100 + descent);
+formation.update((800 - halfWidth * 2) * 10 / 1.5, 10000);
+near(lone.x, halfWidth); near(lone.y, 100 + descent * 2);
 assert.equal(formation.direction, 1);
 formation.update(10, 10000);
-near(lone.x, 17.5); near(lone.y, 100 + descent * 2);
+near(lone.x, halfWidth + 1.5); near(lone.y, 100 + descent * 2);
 assertInside();
 // Frame splitting does not change the result, even when crossing several edges.
 formation.reset(1000);
@@ -461,7 +685,7 @@ assertInside();
 });
 // Changing survivor count mid-flight retains current positions and leftward direction.
 formation.reset();
-formation.update(2520, 10000);
+formation.update(rightTravel * 10, 10000);
 formation.aliens.getChildren().forEach((alien, i) => { alien.active = i % 2 === 0; });
 const acceleratingPositions = survivors().map(alien => [alien.x, alien.y]);
 formation.update(0, 10000);
@@ -488,7 +712,8 @@ assert.equal(formation.speed, 100);
 assert.equal(survivors().length, 40);
 // Equality at the defensive line triggers invasion even without a descent.
 formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
-survivors()[0].body.reset(100, scene.player.getBounds().top - 16);
+const bodyBottomOffset = survivors()[0].body.bottom - survivors()[0].y;
+survivors()[0].body.reset(100, scene.player.getBounds().top - bodyBottomOffset);
 assert.equal(formation.update(0, scene.player.getBounds().top), true);
 assert.equal(formation.movementStopped, true);
 formation.reset();
@@ -496,7 +721,7 @@ formation.reset();
 formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
 formation.aliens.getChildren()[1].y = 1000;
 const invader = survivors()[0];
-invader.body.reset(784, scene.player.getBounds().top - 17);
+invader.body.reset(800 - halfWidth, scene.player.getBounds().top - bodyBottomOffset - 1);
 assert.equal(formation.update(0, scene.player.getBounds().top), false);
 scene.alienManager = formation;
 scene.physics.overlap = () => assert.fail('invasion ends combat before collision checks');
@@ -541,4 +766,4 @@ for (const Type of [Bullet, EnemyBullet]) {
         assert.equal(!!bullet.destroyed, x !== 400 || y !== 300);
     }
 }
-console.log('PASS: coordinated movement, dynamic edges, row descent, lone invader, long frames, invasion/game-over, restart, wave scaling, and all v0.1 wave-transition regressions.');
+console.log('PASS: resolution-independent DOGE poses, alpha bounds, stable hitboxes/controls, coordinated movement, wave scaling, and all wave-transition regressions.');

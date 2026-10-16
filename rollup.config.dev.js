@@ -4,6 +4,7 @@ import replace from '@rollup/plugin-replace';
 import serve from 'rollup-plugin-serve';
 import typescript from 'rollup-plugin-typescript2';
 import livereload from 'rollup-plugin-livereload';
+import copyMemeSkins from './scripts/copy-meme-skins';
 
 export default {
 
@@ -25,6 +26,7 @@ export default {
     },
 
     plugins: [
+        copyMemeSkins(),
 
         //  Toggle the booleans here to enable / disable Phaser 3 features:
         replace({

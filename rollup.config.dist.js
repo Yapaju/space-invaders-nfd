@@ -3,6 +3,7 @@ import resolve from 'rollup-plugin-node-resolve';
 import replace from '@rollup/plugin-replace';
 import { uglify } from 'rollup-plugin-uglify';
 import typescript from 'rollup-plugin-typescript2';
+import copyMemeSkins from './scripts/copy-meme-skins';
 
 export default {
 
@@ -24,6 +25,7 @@ export default {
     },
 
     plugins: [
+        copyMemeSkins(),
 
         //  Toggle the booleans here to enable / disable Phaser 3 features:
         replace({

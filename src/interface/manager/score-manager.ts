@@ -1,4 +1,5 @@
 import { AssetType } from "../assets";
+import { applySkinAppearance, MemeSkins } from "../skins";
 
 export class ScoreManager {
   scoreText: Phaser.GameObjects.Text;
@@ -72,8 +73,8 @@ export class ScoreManager {
         60,
         AssetType.Ship
       );
+      applySkinAppearance(ship, MemeSkins.Player, 24);
       ship.setOrigin(0.5, 0.5);
-      ship.setAngle(90);
       ship.setAlpha(0.6);
     }
   }

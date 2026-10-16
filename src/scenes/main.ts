@@ -12,6 +12,7 @@ import { Kaboom } from "../interface/kaboom";
 import { EnemyBullet } from "../interface/enemy-bullet";
 import { ScoreManager } from "../interface/manager/score-manager";
 import { GameState } from "../interface/game-state";
+import { MemeSkins, SkinDefinition, PlayerPoses, preparePlayerPoses } from "../interface/skins";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -36,27 +37,30 @@ export class MainScene extends Phaser.Scene {
     }
 
     preload() {
-        this.load.setBaseURL("/assets");
-        this.load.image(AssetType.Starfield, "/images/starfield.png");
-        this.load.image(AssetType.Bullet, "/images/bullet.png");
-        this.load.image(AssetType.EnemyBullet, "/images/enemy-bullet.png");
-        this.load.spritesheet(AssetType.Alien, "/images/invader.png", {
-            frameWidth: 32,
-            frameHeight: 32,
+        this.load.setBaseURL("assets/");
+        this.load.image(AssetType.Starfield, "images/starfield.png");
+        this.load.image(AssetType.Bullet, "images/bullet.png");
+        this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
+        Object.keys(MemeSkins).forEach(key => {
+            const skin = MemeSkins[key] as SkinDefinition;
+            if (skin.asset !== MemeSkins.Player.asset) {
+                this.load.image(skin.asset, skin.path);
+            }
         });
-        this.load.image(AssetType.Ship, "/images/player.png");
-        this.load.spritesheet(AssetType.Kaboom, "/images/explode.png", {
+        PlayerPoses.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
+        this.load.spritesheet(AssetType.Kaboom, "images/explode.png", {
             frameWidth: 128,
             frameHeight: 128,
         });
 
         this.sound.volume = 0.5;
-        this.load.audio(SoundType.Shoot, "/audio/shoot.wav");
-        this.load.audio(SoundType.Kaboom, "/audio/explosion.wav");
-        this.load.audio(SoundType.InvaderKilled, "/audio/invaderkilled.wav");
+        this.load.audio(SoundType.Shoot, "audio/shoot.wav");
+        this.load.audio(SoundType.Kaboom, "audio/explosion.wav");
+        this.load.audio(SoundType.InvaderKilled, "audio/invaderkilled.wav");
     }
 
     create() {
+        preparePlayerPoses(this);
         this.state = GameState.Playing;
         this.starfield = this.add
             .tileSprite(0, 0, 800, 600, AssetType.Starfield)
@@ -88,7 +92,7 @@ export class MainScene extends Phaser.Scene {
             this._startNextWave();
         }
         if (this.state === GameState.Playing &&
-            this.alienManager.update(delta, this.player.getBounds().top)) {
+            this.alienManager.update(delta, (this.player.body as Phaser.Physics.Arcade.Body).top)) {
             this._gameOver();
             this.assetManager.gameOver();
             return;
@@ -129,11 +133,15 @@ export class MainScene extends Phaser.Scene {
     private _shipKeyboardHandler() {
         let playerBody = this.player.body as Phaser.Physics.Arcade.Body;
         playerBody.setVelocity(0, 0);
+        let direction = 0;
         if (this.cursors.left.isDown) {
             playerBody.setVelocityX(-200);
+            direction = -1;
         } else if (this.cursors.right.isDown) {
             playerBody.setVelocityX(200);
+            direction = 1;
         }
+        Ship.setDirection(this.player, direction, this.time.now);
 
         if (this.fireKey.isDown) {
             this._fireBullet();
@@ -244,7 +252,9 @@ export class MainScene extends Phaser.Scene {
         this.nextWaveReadyAt = 0;
         this.wave = 1;
         this.state = GameState.Playing;
+        Ship.setDirection(this.player, 0);
         this.player.enableBody(true, 400, 500, true, true);
+        (this.player.body as Phaser.Physics.Arcade.Body).preUpdate(false, 0);
         this.player.setVelocity(0, 0);
         this.scoreManager.setHighScore();
         this.scoreManager.resetLives();
