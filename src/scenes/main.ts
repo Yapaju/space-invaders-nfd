@@ -20,6 +20,9 @@ export class MainScene extends Phaser.Scene {
     scoreManager: ScoreManager;
     bulletTime = 0;
     firingTimer = 0;
+    wave = 1;
+    private nextWaveReadyAt = 0;
+    private pendingCleanup: Array<() => void> = [];
     starfield: Phaser.GameObjects.TileSprite;
     player: Phaser.Physics.Arcade.Sprite;
     alienManager: AlienManager;
@@ -69,18 +72,25 @@ export class MainScene extends Phaser.Scene {
         this.scoreManager = new ScoreManager(this);
 
         this.fireKey.on("down", () => {
-            switch (this.state) {
-                case GameState.Win:
-                case GameState.GameOver:
-                    this.restart();
-                    break;
+            if (this.state === GameState.GameOver) {
+                this.restart();
             }
         })
     }
 
     update() {
         this.starfield.tilePositionY -= 1;
+        if (this.state === GameState.GameOver) {
+            this.player.setVelocity(0, 0);
+            return;
+        }
+        if (this.state === GameState.WaveTransition) {
+            this._startNextWave();
+        }
         this._shipKeyboardHandler();
+        if (this.state === GameState.WaveTransition) {
+            return;
+        }
         if (this.time.now > this.firingTimer) {
             this._enemyFires();
         }
@@ -92,6 +102,7 @@ export class MainScene extends Phaser.Scene {
             null,
             this
         );
+
         this.physics.overlap(
             this.assetManager.enemyBullets,
             this.player,
@@ -99,6 +110,12 @@ export class MainScene extends Phaser.Scene {
             null,
             this
         );
+
+        // Callbacks only disable bodies. Destroy objects and clear groups once
+        // both overlap iterations have finished.
+        const cleanup = this.pendingCleanup;
+        this.pendingCleanup = [];
+        cleanup.forEach(action => action());
     }
 
     private _shipKeyboardHandler() {
@@ -116,20 +133,36 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _bulletHitAliens(bullet: Bullet, alien: Alien) {
+        if (this.state !== GameState.Playing || !bullet.active || !alien.active) {
+            return;
+        }
         let explosion: Kaboom = this.assetManager.explosions.get();
-        bullet.kill();
+        bullet.disableBody(true, true);
         alien.kill(explosion);
+        this.pendingCleanup.push(() => {
+            bullet.destroy();
+            alien.destroy();
+        });
         this.scoreManager.increaseScore();
         if (!this.alienManager.hasAliveAliens) {
             this.scoreManager.increaseScore(1000);
-            this.scoreManager.setWinText();
-            this.state = GameState.Win;
+            this.state = GameState.WaveTransition;
+            this.nextWaveReadyAt = this.time.now + 1500;
+            this.scoreManager.setWaveText(this.wave + 1);
+            this.pendingCleanup.push(() => {
+                this.assetManager.enemyBullets.clear(true, true);
+                this.alienManager.stopMovement();
+            });
         }
     }
 
     private _enemyBulletHitPlayer(ship, enemyBullet: EnemyBullet) {
+        if (this.state !== GameState.Playing || !enemyBullet.active || !this.player.active) {
+            return;
+        }
         let explosion: Kaboom = this.assetManager.explosions.get();
-        enemyBullet.kill();
+        enemyBullet.disableBody(true, true);
+        this.pendingCleanup.push(() => enemyBullet.destroy());
         let live: Phaser.GameObjects.Sprite = this.scoreManager.lives.getFirstAlive();
         if (live) {
             live.setActive(false).setVisible(false);
@@ -140,18 +173,24 @@ export class MainScene extends Phaser.Scene {
         this.sound.play(SoundType.Kaboom)
         if (this.scoreManager.noMoreLives) {
             this.scoreManager.setGameOverText();
-            this.assetManager.gameOver();
             this.state = GameState.GameOver;
             this.player.disableBody(true, true);
+            this.pendingCleanup.push(() => {
+                this.assetManager.gameOver();
+                this.alienManager.stopMovement();
+            });
         }
     }
 
     private _enemyFires() {
-        if (!this.player.active) {
+        if (this.state !== GameState.Playing || !this.player.active) {
+            return;
+        }
+        let randomEnemy = this.alienManager.getRandomAliveEnemy();
+        if (!randomEnemy) {
             return;
         }
         let enemyBullet: EnemyBullet = this.assetManager.enemyBullets.get();
-        let randomEnemy = this.alienManager.getRandomAliveEnemy();
         if (enemyBullet && randomEnemy) {
             enemyBullet.setPosition(randomEnemy.x, randomEnemy.y);
             this.physics.moveToObject(enemyBullet, this.player, 120);
@@ -160,7 +199,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _fireBullet() {
-        if (!this.player.active) {
+        if (this.state !== GameState.Playing || !this.player.active) {
             return;
         }
 
@@ -173,12 +212,36 @@ export class MainScene extends Phaser.Scene {
         }
     }
 
-    restart() {
-        this.state = GameState.Playing;
-        this.player.enableBody(true, this.player.x, this.player.y, true, true);
-        this.scoreManager.resetLives();
+    private _startNextWave() {
+        // In-flight player shots finish naturally, including off-screen cleanup.
+        // Wait at least 1.5 seconds and count active shots so inactive pooled
+        // objects cannot block progression. Neither condition removes missiles.
+        if (this.state !== GameState.WaveTransition || this.time.now < this.nextWaveReadyAt ||
+            this.assetManager.bullets.countActive(true) > 0) {
+            return;
+        }
+        this.wave += 1;
+        this.scoreManager.setWave(this.wave);
+        this.alienManager.reset(this.wave);
         this.scoreManager.hideText();
-        this.alienManager.reset();
+        this.firingTimer = this.time.now + 2000;
+        this.state = GameState.Playing;
+    }
+
+    restart() {
+        this.pendingCleanup = [];
+        this.nextWaveReadyAt = 0;
+        this.wave = 1;
+        this.state = GameState.Playing;
+        this.player.enableBody(true, 400, 500, true, true);
+        this.player.setVelocity(0, 0);
+        this.scoreManager.setHighScore();
+        this.scoreManager.resetLives();
+        this.scoreManager.setWave(this.wave);
+        this.scoreManager.hideText();
+        this.alienManager.reset(this.wave);
         this.assetManager.reset();
+        this.bulletTime = this.time.now;
+        this.firingTimer = this.time.now + 2000;
     }
 }

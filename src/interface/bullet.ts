@@ -14,5 +14,13 @@ export class Bullet extends Phaser.Physics.Arcade.Sprite {
     kill() {
         this.destroy();
     }
+
+    update() {
+        const bounds = this.scene.physics.world.bounds;
+        if (this.x + this.width < bounds.left || this.x - this.width > bounds.right ||
+            this.y + this.height < bounds.top || this.y - this.height > bounds.bottom) {
+            this.kill();
+        }
+    }
 }
 

@@ -4,7 +4,7 @@ import { AnimationType } from "../factory/animation-factory";
 export class AlienManager {
     aliens: Phaser.Physics.Arcade.Group;
     get hasAliveAliens(): boolean {
-        return !!this.aliens.children.size
+        return this.aliens.countActive(true) > 0;
     }
 
     constructor(private _scene: Phaser.Scene) {
@@ -18,15 +18,25 @@ export class AlienManager {
         this._animate();
     }
 
-    getRandomAliveEnemy(): Alien {
-        let random = Phaser.Math.RND.integerInRange(1, this.aliens.children.size);
-        let aliens = this.aliens.children.getArray() as Alien[];
+    getRandomAliveEnemy(): Alien | undefined {
+        let aliens = this.aliens.getChildren().filter(alien => alien.active) as Alien[];
+        if (!aliens.length) {
+            return undefined;
+        }
+        let random = Phaser.Math.RND.integerInRange(0, aliens.length - 1);
         return aliens[random];
     }
 
-    reset() {
+    reset(wave = 1) {
+        this.stopMovement();
         this._sortAliens();
-        this._animate();
+        this._animate(wave);
+    }
+
+    stopMovement() {
+        this.aliens.getChildren().forEach(alien => {
+            this._scene.tweens.killTweensOf(alien);
+        });
     }
 
     private _sortAliens() {
@@ -43,12 +53,12 @@ export class AlienManager {
         }
     }
 
-    private _animate() {
+    private _animate(wave = 1) {
         this.aliens.children.iterate((c: Alien) => {
             this._scene.tweens.add({
                 targets: c,
                 ease: "Linear",
-                duration: 2000,
+                duration: Math.max(600, 2000 / (1 + 0.10 * (wave - 1))),
                 x: "+=200",
                 paused: false,
                 delay: 0,

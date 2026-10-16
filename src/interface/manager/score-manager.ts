@@ -2,6 +2,7 @@ import { AssetType } from "../assets";
 
 export class ScoreManager {
   scoreText: Phaser.GameObjects.Text;
+  waveText: Phaser.GameObjects.Text;
   line1Text: Phaser.GameObjects.Text;
   line2Text: Phaser.GameObjects.Text;
   lives: Phaser.Physics.Arcade.Group;
@@ -36,6 +37,9 @@ export class ScoreManager {
 
     this._scene.add.text(16, 16, `SCORE`, normalTextConfig);
     this.scoreText = this._scene.add.text(22, 32, "", normalTextConfig);
+    this.waveText = this._scene.add
+      .text(SIZE_X / 2, 16, "WAVE 1", normalTextConfig)
+      .setOrigin(0.5, 0);
     this.line1Text = this._scene.add
       .text(SIZE_X / 2, 320, "", bigTextConfig)
       .setOrigin(0.5);
@@ -74,8 +78,12 @@ export class ScoreManager {
     }
   }
 
-  setWinText() {
-    this._setBigText("YOU WON!", "PRESS SPACE FOR NEW GAME");
+  setWave(wave: number) {
+    this.waveText.setText(`WAVE ${wave}`);
+  }
+
+  setWaveText(wave: number) {
+    this._setBigText(`WAVE ${wave}`, "");
   }
 
   setGameOverText() {
