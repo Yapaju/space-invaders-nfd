@@ -39,6 +39,9 @@ class Sprite {
     setVelocityX(x) { this.velocityX = x; return this; }
     setVelocityY(y) { this.velocityY = y; return this; }
     setPosition(x, y) { this.x = x; this.y = y; return this; }
+    setScale(value) { this.scaleX = this.scaleY = value; return this; }
+    setAngle(value) { this.angle = value; return this; }
+    on(event, callback) { this.listeners = this.listeners || {}; this.listeners[event] = callback; return this; }
     setTexture(key) { this.texture.key = key; this.textureChanges++; return this; }
     setOrigin(x, y = x) { this.originX = x; this.originY = y; return this; }
     setDisplaySize(width, height) { this.scaleX = width / this.width; this.scaleY = height / this.height; return this; }
@@ -55,10 +58,11 @@ class Sprite {
     }
     setX(x) { this.x = x; return this; }
     setY(y) { this.y = y; return this; }
-    play() { return this; }
+    play(key) { this.animationKey = key; return this; }
     destroy() { this.destroyed = true; this.active = false; }
 }
 const Phaser = {
+    Animations: { Events: { ANIMATION_COMPLETE: 'animationcomplete' } },
     Scene: class {},
     Physics: { Arcade: { Sprite } },
     Math: { RND: { integerInRange: (min, max) => max } }
@@ -89,18 +93,41 @@ const { EnemyBullet } = load('src/interface/enemy-bullet.ts');
 const { Alien } = load('src/interface/alien.ts');
 const { MemeSkins, PlayerPoses, PlayerCanvas, visibleImageBounds, preparePlayerPoses, applySkin, applySkinAppearance } = load('src/interface/skins.ts');
 const { Ship } = load('src/interface/ship.ts');
+const { EnemyType } = load('src/interface/enemy-type.ts');
+const { getWaveConfiguration } = load('src/interface/wave-config.ts');
+const { PonkePoses, prepareEnemySkins } = load('src/interface/enemy-skins.ts');
+const { BananaBombs, BananaSettings, bananaTrajectory } = load('src/interface/banana-bomb.ts');
+const { Kaboom } = load('src/interface/kaboom.ts');
+const { AnimationFactory } = load('src/interface/factory/animation-factory.ts');
 
 // Skin textures are standalone PNGs, with collision boxes inside their artwork.
 const textureRequests = [];
+const sheetRequests = [];
 const preloadScene = new MainScene();
 preloadScene.sound = {};
 preloadScene.load = {
     setBaseURL(url) { this.baseURL = url; },
     image(asset, url) { textureRequests.push({ asset, url }); },
-    spritesheet(asset, url) { assert.equal(asset, 'kaboom', 'only explosions use a sprite sheet'); },
+    spritesheet(asset, url, config) { sheetRequests.push({ asset, url, config }); },
     audio() {}
 };
 preloadScene.preload();
+assert.deepEqual(sheetRequests, [
+    { asset: 'kaboom', url: 'images/explode.png', config: { frameWidth: 128, frameHeight: 128 } },
+    { asset: 'ponke-explosion', url: 'meme-skins/ponke-explosion.png', config: { frameWidth: 128, frameHeight: 128 } }
+]);
+const animationConfigs = [];
+new AnimationFactory({ anims: {
+    create(config) { animationConfigs.push(config); },
+    generateFrameNumbers(texture, range) { return { texture, start: range.start, end: range.end }; }
+} });
+assert.equal(animationConfigs.length, 2);
+for (const [index, key] of ['kaboom', 'ponke-explosion'].entries()) {
+    assert.deepEqual(animationConfigs[index], {
+        key, frames: { texture: key, start: 0, end: 15 },
+        frameRate: 24, repeat: 0, hideOnComplete: true
+    });
+}
 for (const skin of Object.values(MemeSkins)) {
     const asset = skin === MemeSkins.Player ? `${skin.asset}-source` : skin.asset;
     assert(textureRequests.some(request => request.asset === asset && request.url === skin.path));
@@ -125,6 +152,8 @@ applySkinAppearance(lifeIcon, MemeSkins.Player, 24);
 nearSkin(lifeIcon.getBounds().right - lifeIcon.getBounds().left, 24);
 assert(textureRequests.every(request => !request.url.startsWith('/')));
 assert.equal(preloadScene.load.baseURL, 'assets/');
+assert(textureRequests.some(request => request.asset === 'ponke-banana' && request.url === 'meme-skins/ponke-weapon.png'));
+assert.equal(fs.readFileSync(path.resolve(__dirname, '../assets/meme-skins/ponke-weapon.png')).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
 
 // High-resolution replacements have transparent pixels in the old crop regions.
 // Locate visible pixels dynamically and normalize all five poses to a fixed canvas.
@@ -179,6 +208,48 @@ for (const pose of PlayerPoses) {
     nearSkin(width / height, image.bounds.width / image.bounds.height);
     nearSkin(x + width / 2, MemeSkins.Player.originX * PlayerCanvas.width);
     nearSkin(y + height * MemeSkins.Player.originY, MemeSkins.Player.originY * PlayerCanvas.height);
+}
+
+// Both original PONKE PNGs load and fit the existing PEPE-sized frame unchanged.
+const ponkeImages = new Map();
+const ponkeTextures = new Map();
+for (const pose of PonkePoses) {
+    assert(textureRequests.some(request => request.asset === `${pose.asset}-source` && request.url === pose.path));
+    const png = fs.readFileSync(path.resolve(__dirname, '../assets', pose.path));
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    ponkeImages.set(`${pose.asset}-source`, { width: png.readUInt32BE(16), height: png.readUInt32BE(20) });
+}
+const enemySkinScene = { textures: {
+    getFrame(key) { assert.equal(key, 'alien'); return { width: 337, height: 282 }; },
+    exists: key => ponkeImages.has(key) || ponkeTextures.has(key),
+    get: key => ({ getSourceImage: () => ponkeImages.get(key) }),
+    createCanvas(key, width, height) {
+        const texture = { width, height, draws: [], refreshes: 0,
+            context: { drawImage(...args) { texture.draws.push(args); } },
+            refresh() { texture.refreshes++; }
+        };
+        ponkeTextures.set(key, texture);
+        return texture;
+    }
+} };
+prepareEnemySkins(enemySkinScene);
+prepareEnemySkins(enemySkinScene);
+assert.equal(ponkeTextures.size, 2);
+for (const pose of PonkePoses) {
+    const texture = ponkeTextures.get(pose.asset);
+    assert.equal(texture.width, 337); assert.equal(texture.height, 282);
+    assert.equal(texture.draws.length, 1); assert.equal(texture.refreshes, 1);
+    const [image, x, y, width, height] = texture.draws[0];
+    assert.equal(texture.draws[0].length, 5, 'fit the whole original image without cropping or flipping');
+    assert.strictEqual(image, ponkeImages.get(`${pose.asset}-source`));
+    assert(width > 0 && height > 0 && x >= 0 && y >= 0);
+    nearSkin(width / height, image.width / image.height);
+    nearSkin(x + width / 2, 337 / 2); nearSkin(y + height / 2, 282 / 2);
+}
+for (const wave of [1, 2, 3, 4, 5, 6, 7, 8, 99, 100, 999, 1000]) {
+    const config = getWaveConfiguration(wave);
+    assert.equal(config.enemies.length, 40);
+    assert(config.enemies.every(type => type === (wave % 2 ? EnemyType.Ponke : EnemyType.Pepe)));
 }
 
 // Use the installed Phaser Body to verify scaled offsets and no post-update drift.
@@ -306,6 +377,8 @@ Object.assign(score, {
 scene.scoreManager = score;
 let clearCount = 0, stopCount = 0, spawnCount = 0, inOverlap = false;
 let enemyClearCount = 0;
+let bananaClearCount = 0;
+scene.bananaBombs = { clear() { bananaClearCount++; }, update() {} };
 let transitionBullets = [];
 scene.assetManager = {
     bullets: { get() {
@@ -377,6 +450,7 @@ assert.equal(score.message, 'WAVE 2', 'announce the upcoming wave immediately');
 assert.equal(scene.nextWaveReadyAt, 1600);
 assert.equal(clearCount, 0, 'player missiles must not be cleared');
 assert.equal(enemyClearCount, 1);
+assert.equal(bananaClearCount, 1, 'wave transition removes banana flights and blasts after overlaps');
 assert(flyingShot.active && trailingShot.active);
 assert.equal(flyingShot.y, 300);
 assert.equal(trailingShot.y, 480);
@@ -569,6 +643,7 @@ const assertInside = () => survivors().forEach(alien => {
     near(alien.collisionY, alien.y);
 });
 assert.equal(survivors().length, 40);
+assert(survivors().every(alien => alien.enemyType === EnemyType.Ponke && alien.texture.key === 'ponke-right'));
 assert.equal(formation.rowSpacing, 50);
 const descent = formation.rowSpacing / 2;
 const originalPositions = survivors().map(alien => [alien.x, alien.y]);
@@ -581,6 +656,7 @@ assertInside();
 // Reach the right edge using the current skin's visual bounds.
 const rightTravel = 800 - (originalPositions[9][0] + survivors()[9].width * survivors()[9].scaleX / 2);
 formation.update((rightTravel - 100) * 10, 10000);
+assert(survivors().every(alien => alien.texture.key === 'ponke-left'), 'switch at the right edge immediately');
 survivors().forEach((alien, i) => {
     near(alien.x, originalPositions[i][0] + rightTravel);
     near(alien.y, originalPositions[i][1] + descent);
@@ -628,11 +704,73 @@ const halfWidth = lone.width * lone.scaleX / 2;
 formation.update((800 - halfWidth - lone.x) * 10 / 1.5, 10000);
 near(lone.x, 800 - halfWidth); near(lone.y, 100 + descent);
 formation.update((800 - halfWidth * 2) * 10 / 1.5, 10000);
+assert.equal(lone.texture.key, 'ponke-right', 'switch at the left edge immediately');
 near(lone.x, halfWidth); near(lone.y, 100 + descent * 2);
 assert.equal(formation.direction, 1);
 formation.update(10, 10000);
 near(lone.x, halfWidth + 1.5); near(lone.y, 100 + descent * 2);
 assertInside();
+// Resetting from leftward movement starts the next configured wave facing right.
+for (const wave of [2, 3, 4, 5, 99, 100]) {
+    formation.reset(wave);
+    const expectedType = wave % 2 ? EnemyType.Ponke : EnemyType.Pepe;
+    const expectedTexture = wave % 2 ? 'ponke-right' : 'alien';
+    assert.equal(survivors().length, 40);
+    assert(survivors().every(alien => alien.enemyType === expectedType && alien.texture.key === expectedTexture));
+    formation.update(rightTravel / formation.speed * 1000, 10000);
+    assert.equal(formation.direction, -1);
+    assert(survivors().every(alien => alien.texture.key === (wave % 2 ? 'ponke-left' : 'alien')));
+}
+// The visual change cannot alter origin, scale, collision geometry or velocity.
+const typedAlien = new Alien({}, 250, 200);
+typedAlien.angle = 0;
+typedAlien.body = new ArcadeBody({ defaults: {}, bounds: {} }, typedAlien);
+for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
+    typedAlien.configure(type, 1);
+    typedAlien.body.velocity.set(42, 7);
+    const geometry = () => [typedAlien.x, typedAlien.y, typedAlien.scaleX, typedAlien.scaleY,
+        typedAlien.originX, typedAlien.originY, typedAlien.body.left, typedAlien.body.top,
+        typedAlien.body.width, typedAlien.body.height, typedAlien.body.velocity.x, typedAlien.body.velocity.y];
+    const before = geometry();
+    const changes = typedAlien.textureChanges;
+    typedAlien.setDirection(-1);
+    assert.equal(typedAlien.texture.key, type === EnemyType.Ponke ? 'ponke-left' : 'alien');
+    assert.deepEqual(geometry(), before);
+    if (type === EnemyType.Pepe) assert.equal(typedAlien.textureChanges, changes);
+    const afterSwitch = typedAlien.textureChanges;
+    typedAlien.setDirection(-1);
+    assert.equal(typedAlien.textureChanges, afterSwitch);
+    typedAlien.setDirection(1);
+    assert.deepEqual(geometry(), before);
+    assert.equal(typedAlien.texture.key, type === EnemyType.Ponke ? 'ponke-right' : 'alien');
+}
+// Enemy-specific selection preserves PEPE's original aiming, speed and cooldown.
+for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
+    typedAlien.configure(type, 1);
+    const attackScene = new MainScene();
+    attackScene.state = GameState.Playing;
+    attackScene.time = { now: 3000 };
+    attackScene.player = new Sprite(attackScene, 400, 500, 'ship');
+    attackScene.alienManager = { getRandomAliveEnemy: () => typedAlien };
+    const projectile = new EnemyBullet(attackScene);
+    let redShots = 0, bananaLaunch;
+    attackScene.assetManager = { enemyBullets: { get: () => { redShots++; return projectile; } } };
+    attackScene.bananaBombs = { launch(...args) { bananaLaunch = args; } };
+    let aim;
+    attackScene.physics = { moveToObject(bullet, target, speed) { aim = { bullet, target, speed }; } };
+    attackScene._enemyFires();
+    if (type === EnemyType.Ponke) {
+        assert.deepEqual(bananaLaunch, [typedAlien.x, typedAlien.y, 400, 500]);
+        assert.equal(redShots, 0); assert.equal(aim, undefined);
+    } else {
+        assert.equal(bananaLaunch, undefined); assert.equal(redShots, 1);
+        assert.equal(projectile.texture.key, 'enemyBullet');
+        assert.equal(projectile.x, typedAlien.x); assert.equal(projectile.y, typedAlien.y);
+        assert.strictEqual(aim.bullet, projectile); assert.strictEqual(aim.target, attackScene.player);
+        assert.equal(aim.speed, 120);
+    }
+    assert.equal(attackScene.firingTimer, 5000);
+}
 // Frame splitting does not change the result, even when crossing several edges.
 formation.reset(1000);
 formation.update(10000, 10000);
@@ -739,7 +877,9 @@ formation.update(1000, 0);
 scene.update(1000, 1000);
 assert.equal(invader.y, invadedY);
 scene._enemyFires(); scene._fireBullet();
+const clearsBeforeRestart = bananaClearCount;
 scene.restart();
+assert.equal(bananaClearCount, clearsBeforeRestart + 1);
 assert.equal(scene.state, GameState.Playing);
 assert.equal(scene.wave, 1);
 assert.equal(score.score, 0);
@@ -766,4 +906,122 @@ for (const Type of [Bullet, EnemyBullet]) {
         assert.equal(!!bullet.destroyed, x !== 400 || y !== 300);
     }
 }
-console.log('PASS: resolution-independent DOGE poses, alpha bounds, stable hitboxes/controls, coordinated movement, wave scaling, and all wave-transition regressions.');
+// A fixed parabola is frame-rate independent, clamped to the playfield, and
+// cannot be changed by player movement or tuning changes after launch.
+const arc = bananaTrajectory(200, 150, 400, 500, 12, 788);
+near(arc.landingX, 400);
+near(arc.position(0).x, 200); near(arc.position(0).y, 150);
+near(arc.position(arc.duration).x, 400); near(arc.position(arc.duration).y, 500);
+const midpoint = arc.position(arc.duration / 2);
+near(midpoint.x, 300);
+assert(midpoint.y < 325, 'gravity produces a curve rather than a diagonal line');
+const savedGravity = BananaSettings.gravity;
+BananaSettings.gravity *= 2;
+near(arc.position(arc.duration / 2).y, midpoint.y);
+BananaSettings.gravity = savedGravity;
+assert(bananaTrajectory(780, 100, 790, 500, 12, 788).landingX <= 788);
+assert(bananaTrajectory(20, 100, 0, 500, 12, 788).landingX >= 12);
+assert.equal(bananaTrajectory(400, 150, 401, 500, 12, 788).landingX, 500);
+
+const bombScene = {
+    time: { now: 1000 },
+    physics: { world: { bounds: { left: 0, right: 800 } } },
+    add: { sprite: (x, y, texture) => new Sprite(bombScene, x, y, texture) }
+};
+const blastSprites = [];
+const blastGroup = { get() {
+    const sprite = new Kaboom(bombScene);
+    sprite.width = sprite.height = 128;
+    blastSprites.push(sprite);
+    return sprite;
+} };
+let bombHits = 0;
+const bombs = new BananaBombs(bombScene, blastGroup, () => bombHits++);
+const doge = new Sprite(bombScene, 400, 500, 'ship');
+function dogeAt(x, y = 500) {
+    doge.setPosition(x, y);
+    doge.body = { left: x - 10, right: x + 10, top: y - 10, bottom: y + 10 };
+}
+dogeAt(400);
+bombs.launch(200, 150, doge.x, doge.y);
+const flight = bombs.flights[0];
+assert.equal(flight.sprite.texture.key, 'ponke-banana');
+// Mock Sprites have a body; production scene.add.sprite creates no Arcade body.
+bombScene.time.now = 1000 + arc.duration * 500;
+dogeAt(midpoint.x, midpoint.y);
+bombs.update(doge);
+near(flight.sprite.x, midpoint.x); near(flight.sprite.y, midpoint.y);
+assert(flight.sprite.angle > 0);
+assert.equal(bombHits, 0, 'flying bananas are harmless even at DOGE');
+dogeAt(700);
+bombScene.time.now = 1000 + arc.duration * 1000 + 1;
+bombs.update(doge);
+assert(flight.sprite.destroyed); assert.equal(bombs.flights.length, 0);
+const blast = blastSprites[0];
+assert.equal(blast.animationKey, 'ponke-explosion', 'only banana landing selects the yellow animation');
+near(blast.x, 400); near(blast.y, 500);
+near(blast.scaleX, 1); near(blast.width * blast.scaleX / 2, 64);
+near(BananaSettings.hitRadius, 48);
+assert.equal(bombHits, 0, 'landing stays fixed after DOGE moves');
+dogeAt(459); // Body starts 49px away: just outside the effective fireball radius.
+bombs.update(doge); assert.equal(bombHits, 0);
+dogeAt(457); // Body starts 47px away: edge overlap damages DOGE even with his center outside.
+bombs.update(doge); assert.equal(bombHits, 1);
+for (let i = 0; i < 10; i++) bombs.update(doge);
+assert.equal(bombHits, 1, 'each explosion can damage at most once');
+assert.equal(blastGroup.get().scaleX, 1, 'other explosions retain original size');
+const killedInvaderExplosion = blastGroup.get();
+new Alien({ sound: { play() {} } }, 0, 0).kill(killedInvaderExplosion);
+assert.equal(killedInvaderExplosion.animationKey, 'kaboom', 'destroyed invaders keep the original red animation');
+blast.listeners.animationcomplete();
+bombs.update(doge); assert.equal(bombs.blasts.length, 0, 'completed animations release damage entries');
+
+// Walk into an unspent blast after its damage window; it is visual only.
+bombs.launch(200, 150, 400, 500);
+dogeAt(700);
+const secondLaunch = bombScene.time.now;
+bombScene.time.now = secondLaunch + arc.duration * 1000 + 1;
+bombs.update(doge);
+dogeAt(400);
+bombScene.time.now = secondLaunch + arc.duration * 1000 + BananaSettings.damageDurationMs;
+bombs.update(doge); assert.equal(bombHits, 1);
+// Long frames do not extend the damaging deadline.
+bombs.launch(200, 150, 400, 500);
+bombScene.time.now += arc.duration * 1000 + 200;
+bombs.update(doge); assert.equal(bombHits, 1);
+doge.active = false;
+bombs.launch(200, 150, 400, 500);
+bombScene.time.now += arc.duration * 1000 + 1;
+bombs.update(doge); assert.equal(bombHits, 1, 'inactive DOGE cannot take damage');
+bombs.launch(200, 150, 400, 500);
+const objectsToClear = [...bombs.flights, ...bombs.blasts].map(entry => entry.sprite);
+bombs.clear(); bombs.clear();
+assert(objectsToClear.every(sprite => sprite.destroyed));
+assert.equal(bombs.flights.length, 0); assert.equal(bombs.blasts.length, 0);
+bombScene.time.now += 10000;
+doge.active = true;
+bombs.update(doge); assert.equal(bombHits, 1, 'no callbacks or hitboxes survive cleanup');
+assert(bananaClearCount >= 4, 'transitions, life-loss GAME OVER, invasion and restart clear bananas');
+
+// Exercise banana impacts through the actual scene life-loss/GAME OVER path.
+const combatBombs = new BananaBombs(bombScene, blastGroup, () => scene._damagePlayer(false));
+scene.bananaBombs = combatBombs;
+scene.player = doge;
+scene.state = GameState.Playing;
+score.remaining = 3;
+scene.assetManager.explosions.get = () => assert.fail('banana hits must not add a full-size explosion');
+for (let lives = 2; lives >= 0; lives--) {
+    combatBombs.launch(200, 150, 400, 500);
+    bombScene.time.now += arc.duration * 1000 + 1;
+    combatBombs.update(doge);
+    assert.equal(score.remaining, lives);
+    combatBombs.update(doge);
+    assert.equal(score.remaining, lives, 'one banana explosion removes one life');
+}
+assert.equal(scene.state, GameState.GameOver);
+assert(!doge.active);
+assert.equal(combatBombs.flights.length, 0);
+assert.equal(combatBombs.blasts.length, 0, 'lethal impact clears banana effects immediately');
+scene._damagePlayer(false);
+assert.equal(score.remaining, 0, 'GAME OVER blocks further damage');
+console.log('PASS: banana selection, fixed arcs, explosion-only damage, radius/window, single hits, animation and lifecycle cleanup; existing wave, movement, skin, DOGE and PEPE regressions.');

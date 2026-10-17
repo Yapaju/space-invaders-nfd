@@ -13,6 +13,9 @@ import { EnemyBullet } from "../interface/enemy-bullet";
 import { ScoreManager } from "../interface/manager/score-manager";
 import { GameState } from "../interface/game-state";
 import { MemeSkins, SkinDefinition, PlayerPoses, preparePlayerPoses } from "../interface/skins";
+import { PonkePoses, prepareEnemySkins } from "../interface/enemy-skins";
+import { EnemyType } from "../interface/enemy-type";
+import { BananaBombs } from "../interface/banana-bomb";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -24,6 +27,7 @@ export class MainScene extends Phaser.Scene {
     wave = 1;
     private nextWaveReadyAt = 0;
     private pendingCleanup: Array<() => void> = [];
+    private bananaBombs: BananaBombs;
     starfield: Phaser.GameObjects.TileSprite;
     player: Phaser.Physics.Arcade.Sprite;
     alienManager: AlienManager;
@@ -41,6 +45,7 @@ export class MainScene extends Phaser.Scene {
         this.load.image(AssetType.Starfield, "images/starfield.png");
         this.load.image(AssetType.Bullet, "images/bullet.png");
         this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
+        this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
         Object.keys(MemeSkins).forEach(key => {
             const skin = MemeSkins[key] as SkinDefinition;
             if (skin.asset !== MemeSkins.Player.asset) {
@@ -48,7 +53,12 @@ export class MainScene extends Phaser.Scene {
             }
         });
         PlayerPoses.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
+        PonkePoses.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         this.load.spritesheet(AssetType.Kaboom, "images/explode.png", {
+            frameWidth: 128,
+            frameHeight: 128,
+        });
+        this.load.spritesheet(AssetType.PonkeExplosion, "meme-skins/ponke-explosion.png", {
             frameWidth: 128,
             frameHeight: 128,
         });
@@ -61,6 +71,7 @@ export class MainScene extends Phaser.Scene {
 
     create() {
         preparePlayerPoses(this);
+        prepareEnemySkins(this);
         this.state = GameState.Playing;
         this.starfield = this.add
             .tileSprite(0, 0, 800, 600, AssetType.Starfield)
@@ -74,6 +85,11 @@ export class MainScene extends Phaser.Scene {
         this.player = Ship.create(this);
         this.alienManager = new AlienManager(this);
         this.scoreManager = new ScoreManager(this);
+        this.bananaBombs = new BananaBombs(this, this.assetManager.explosions, () => this._damagePlayer(false));
+        this.events.once('shutdown', () => {
+            this.bananaBombs.clear();
+            this.pendingCleanup = [];
+        });
 
         this.fireKey.on("down", () => {
             if (this.state === GameState.GameOver) {
@@ -123,6 +139,10 @@ export class MainScene extends Phaser.Scene {
             this
         );
 
+        if (this.state === GameState.Playing && this.bananaBombs) {
+            this.bananaBombs.update(this.player);
+        }
+
         // Callbacks only disable bodies. Destroy objects and clear groups once
         // both overlap iterations have finished.
         const cleanup = this.pendingCleanup;
@@ -167,6 +187,7 @@ export class MainScene extends Phaser.Scene {
             this.scoreManager.setWaveText(this.wave + 1);
             this.pendingCleanup.push(() => {
                 this.assetManager.enemyBullets.clear(true, true);
+                if (this.bananaBombs) this.bananaBombs.clear();
                 this.alienManager.stopMovement();
             });
         }
@@ -176,16 +197,24 @@ export class MainScene extends Phaser.Scene {
         if (this.state !== GameState.Playing || !enemyBullet.active || !this.player.active) {
             return;
         }
-        let explosion: Kaboom = this.assetManager.explosions.get();
         enemyBullet.disableBody(true, true);
         this.pendingCleanup.push(() => enemyBullet.destroy());
+        this._damagePlayer();
+    }
+
+    private _damagePlayer(showHitExplosion = true) {
+        if (this.state !== GameState.Playing || !this.player.active) return;
         let live: Phaser.GameObjects.Sprite = this.scoreManager.lives.getFirstAlive();
         if (live) {
             live.setActive(false).setVisible(false);
         }
 
-        explosion.setPosition(this.player.x, this.player.y);
-        explosion.play(AnimationType.Kaboom);
+        // Banana damage already has its landing explosion.
+        if (showHitExplosion) {
+            let explosion: Kaboom = this.assetManager.explosions.get();
+            explosion.setPosition(this.player.x, this.player.y);
+            explosion.play(AnimationType.Kaboom);
+        }
         this.sound.play(SoundType.Kaboom)
         if (this.scoreManager.noMoreLives) {
             this._gameOver();
@@ -199,6 +228,7 @@ export class MainScene extends Phaser.Scene {
         this.player.setVelocity(0, 0);
         this.player.disableBody(true, true);
         this.alienManager.stopMovement();
+        if (this.bananaBombs) this.bananaBombs.clear();
     }
 
     private _enemyFires() {
@@ -207,6 +237,11 @@ export class MainScene extends Phaser.Scene {
         }
         let randomEnemy = this.alienManager.getRandomAliveEnemy();
         if (!randomEnemy) {
+            return;
+        }
+        if (randomEnemy.enemyType === EnemyType.Ponke) {
+            this.bananaBombs.launch(randomEnemy.x, randomEnemy.y, this.player.x, this.player.y);
+            this.firingTimer = this.time.now + 2000;
             return;
         }
         let enemyBullet: EnemyBullet = this.assetManager.enemyBullets.get();
@@ -248,6 +283,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     restart() {
+        if (this.bananaBombs) this.bananaBombs.clear();
         this.pendingCleanup = [];
         this.nextWaveReadyAt = 0;
         this.wave = 1;

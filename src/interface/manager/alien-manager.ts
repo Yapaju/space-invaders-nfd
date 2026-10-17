@@ -1,5 +1,5 @@
 import { Alien } from "../alien";
-import { applySkin, MemeSkins } from "../skins";
+import { getWaveConfiguration } from "../wave-config";
 
 export class AlienManager {
     aliens: Phaser.Physics.Arcade.Group;
@@ -32,8 +32,8 @@ export class AlienManager {
 
     reset(wave = 1) {
         this.stopMovement();
-        this._sortAliens();
         this.direction = 1;
+        this._sortAliens(wave);
         const duration = Math.max(600, 2000 / (1 + 0.10 * (wave - 1)));
         // Preserve v0.1's speed: 200 pixels over the scaled duration.
         this.speed = 200 / (duration / 1000);
@@ -76,6 +76,7 @@ export class AlienManager {
             }
             this._move(aliens, 0, this.rowSpacing / 2);
             this.direction *= -1;
+            aliens.forEach(alien => alien.setDirection(this.direction));
             if (reachedPlayer()) {
                 this.stopMovement();
                 return true;
@@ -94,14 +95,15 @@ export class AlienManager {
         });
     }
 
-    private _sortAliens() {
+    private _sortAliens(wave = 1) {
         let ORIGIN_X = 100;
         let ORIGIN_Y = 100;
+        const config = getWaveConfiguration(wave);
         this.aliens.clear(true, true);
         for (let y = 0; y < 4; y++) {
             for (let x = 0; x < 10; x++) {
                 let alien: Alien = this.aliens.create(ORIGIN_X + x * 48, ORIGIN_Y + y * this.rowSpacing);
-                applySkin(alien, MemeSkins.Invader);
+                alien.configure(config.enemies[y * 10 + x], this.direction);
                 alien.setImmovable(false);
             }
         }

@@ -1,7 +1,8 @@
 import { AssetType } from "../assets";
 
 export enum AnimationType {
-    Kaboom = "kaboom"
+    Kaboom = "kaboom",
+    PonkeExplosion = "ponke-explosion"
 }
 
 export class AnimationFactory {
@@ -20,5 +21,15 @@ export class AnimationFactory {
             repeat: 0,
             hideOnComplete: true
         })
+        this._scene.anims.create({
+            key: AnimationType.PonkeExplosion,
+            frames: this._scene.anims.generateFrameNumbers(AssetType.PonkeExplosion, {
+                start: 0,
+                end: 15
+            }),
+            frameRate: 24,
+            repeat: 0,
+            hideOnComplete: true
+        });
     }
 }
