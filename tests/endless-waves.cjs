@@ -41,6 +41,11 @@ class Sprite {
     setPosition(x, y) { this.x = x; this.y = y; return this; }
     setScale(value) { this.scaleX = this.scaleY = value; return this; }
     setAngle(value) { this.angle = value; return this; }
+    setTint(value) { this.tint = value; return this; }
+    clearTint() { this.tint = undefined; return this; }
+    setVisible(value) { this.visible = value; return this; }
+    setActive(value) { this.active = value; return this; }
+    setAlpha(value) { this.alpha = value; return this; }
     on(event, callback) { this.listeners = this.listeners || {}; this.listeners[event] = callback; return this; }
     setTexture(key) { this.texture.key = key; this.textureChanges++; return this; }
     setOrigin(x, y = x) { this.originX = x; this.originY = y; return this; }
@@ -85,7 +90,7 @@ function load(relative) {
 }
 const { MainScene } = load('src/scenes/main.ts');
 const { GameState } = load('src/interface/game-state.ts');
-const { ScoreManager } = load('src/interface/manager/score-manager.ts');
+const { ScoreManager, MAX_LIVES } = load('src/interface/manager/score-manager.ts');
 const { AlienManager } = load('src/interface/manager/alien-manager.ts');
 const { AssetManager } = load('src/interface/manager/asset-manager.ts');
 const { Bullet } = load('src/interface/bullet.ts');
@@ -99,6 +104,7 @@ const { PonkePoses, prepareEnemySkins } = load('src/interface/enemy-skins.ts');
 const { BananaBombs, BananaSettings, bananaTrajectory } = load('src/interface/banana-bomb.ts');
 const { Kaboom } = load('src/interface/kaboom.ts');
 const { AnimationFactory } = load('src/interface/factory/animation-factory.ts');
+const { DamageFeedback, DamageFeedbackSettings } = load('src/interface/damage-feedback.ts');
 
 // Skin textures are standalone PNGs, with collision boxes inside their artwork.
 const textureRequests = [];
@@ -375,6 +381,10 @@ Object.assign(score, {
     resetLives() { this.remaining = 3; }
 });
 scene.scoreManager = score;
+let sharedFeedbackCount = 0, feedbackClearCount = 0;
+scene.damageFeedback = {
+    show() { sharedFeedbackCount++; }, clear() { feedbackClearCount++; }
+};
 let clearCount = 0, stopCount = 0, spawnCount = 0, inOverlap = false;
 let enemyClearCount = 0;
 let bananaClearCount = 0;
@@ -563,6 +573,7 @@ scene.update();
 assert.equal(spawnCount, 2, 'the deadline cannot spawn the wave twice');
 
 // Three hits end the game; cleanup runs after the collision iteration.
+const feedbackBeforePepe = sharedFeedbackCount;
 scene.physics.overlap = group => {
     inOverlap = true;
     if (group === scene.assetManager.enemyBullets) {
@@ -575,13 +586,16 @@ scene.physics.overlap = group => {
 scene.update();
 assert.equal(scene.state, GameState.GameOver);
 assert.equal(score.remaining, 0);
+assert.equal(sharedFeedbackCount, feedbackBeforePepe + 3, 'PEPE uses the shared successful-life-loss feedback');
 assert(!scene.player.active);
 const before = clearCount;
 scene._enemyFires();
 scene._fireBullet();
 scene.update();
 assert.equal(clearCount, before);
+const feedbackClearsBeforeRestart = feedbackClearCount;
 scene.restart();
+assert.equal(feedbackClearCount, feedbackClearsBeforeRestart + 1, 'restart clears damage feedback before lives are rebuilt');
 assert.equal(scene.wave, 1);
 assert.equal(score.score, 0);
 assert.equal(score.remaining, 3);
@@ -1004,7 +1018,9 @@ bombs.update(doge); assert.equal(bombHits, 1, 'no callbacks or hitboxes survive 
 assert(bananaClearCount >= 4, 'transitions, life-loss GAME OVER, invasion and restart clear bananas');
 
 // Exercise banana impacts through the actual scene life-loss/GAME OVER path.
-const combatBombs = new BananaBombs(bombScene, blastGroup, () => scene._damagePlayer(false));
+let bananaFeedbackCount = 0;
+scene.damageFeedback = { show() { bananaFeedbackCount++; } };
+const combatBombs = new BananaBombs(bombScene, blastGroup, () => scene._damagePlayer());
 scene.bananaBombs = combatBombs;
 scene.player = doge;
 scene.state = GameState.Playing;
@@ -1022,6 +1038,228 @@ assert.equal(scene.state, GameState.GameOver);
 assert(!doge.active);
 assert.equal(combatBombs.flights.length, 0);
 assert.equal(combatBombs.blasts.length, 0, 'lethal impact clears banana effects immediately');
-scene._damagePlayer(false);
+scene._damagePlayer();
 assert.equal(score.remaining, 0, 'GAME OVER blocks further damage');
+assert.equal(bananaFeedbackCount, 3, 'each successful banana life loss triggers shared feedback exactly once');
+
+// Visual feedback uses scene events, so completion does not depend on the combat
+// update continuing after a fatal hit. No timers, tweens, or physics are needed.
+let visualListeners = [];
+const rings = [];
+const feedbackScene = new MainScene();
+feedbackScene.time = { now: 0 };
+feedbackScene.events = {
+    on(event, callback, context) { visualListeners.push({ event, callback, context }); },
+    once(event, callback, context) { visualListeners.push({ event, callback, context, once: true }); },
+    off(event, callback, context) {
+        visualListeners = visualListeners.filter(item => item.event !== event || item.callback !== callback || item.context !== context);
+    },
+    emit(event) {
+        for (const item of visualListeners.filter(item => item.event === event)) {
+            if (item.once) this.off(event, item.callback, item.context);
+            item.callback.call(item.context);
+        }
+    }
+};
+feedbackScene.add = { graphics() {
+    const ring = {
+        setPosition(x, y) { this.x = x; this.y = y; return this; },
+        setDepth(depth) { this.depth = depth; return this; },
+        clear() { return this; },
+        lineStyle(width, color, alpha) { this.alpha = alpha; return this; },
+        strokeCircle(x, y, radius) { this.radius = radius; return this; },
+        destroy() { this.destroyed = true; }
+    };
+    rings.push(ring); return ring;
+} };
+feedbackScene.player = new Sprite(feedbackScene, 400, 500, 'ship');
+feedbackScene.player.depth = 0;
+const feedbackLives = [0, 1, 2].map(i => new Sprite(feedbackScene, 700 + i * 30, 60, 'ship'));
+feedbackScene.scoreManager = {
+    lives: { getFirstAlive: () => feedbackLives.find(life => life.active) },
+    get noMoreLives() { return !feedbackLives.some(life => life.active); },
+    setGameOverText() {}
+};
+feedbackScene.assetManager = { explosions: { get() { assert.fail('player damage must never create an invader explosion'); } } };
+feedbackScene.sound = { play() {} };
+feedbackScene.alienManager = { stopMovement() {} };
+feedbackScene.state = GameState.Playing;
+const feedback = new DamageFeedback(feedbackScene, feedbackScene.player);
+feedbackScene.damageFeedback = feedback;
+function tickFeedback(now) { feedbackScene.time.now = now; feedbackScene.events.emit('postupdate'); }
+const playerGeometry = () => [feedbackScene.player.x, feedbackScene.player.y,
+    feedbackScene.player.scaleX, feedbackScene.player.scaleY, feedbackScene.player.body];
+const undamagedGeometry = playerGeometry();
+
+// The existing inactive-player gate blocks damage and feedback. There is no
+// timed invulnerability rule in this game to alter or synthesize in the test.
+feedbackScene.player.active = false;
+feedbackScene._damagePlayer();
+assert.equal(rings.length, 0); assert(feedbackLives.every(life => life.active));
+feedbackScene.player.active = true;
+feedbackScene.state = GameState.WaveTransition;
+feedbackScene._damagePlayer(); assert.equal(rings.length, 0);
+feedbackScene.state = GameState.Playing;
+const pepeShot = new EnemyBullet(feedbackScene);
+feedbackScene._enemyBulletHitPlayer(feedbackScene.player, pepeShot);
+assert(!feedbackLives[0].active && feedbackLives[0].visible);
+assert.equal(feedbackLives[0].tint, DamageFeedbackSettings.tint);
+assert.equal(feedbackScene.player.tint, DamageFeedbackSettings.tint);
+assert.equal(rings.length, 1); assert.equal(rings[0].radius, 14);
+assert.deepEqual([rings[0].x, rings[0].y], [400, 500]);
+feedbackScene._enemyBulletHitPlayer(feedbackScene.player, pepeShot);
+assert.equal(feedbackLives.filter(life => life.active).length, 2, 'duplicate collision does not repeat life loss');
+assert.equal(rings.length, 1);
+for (const [now, tinted] of [[50, false], [100, true], [150, false], [200, true]]) {
+    tickFeedback(now);
+    assert.equal(feedbackScene.player.tint === DamageFeedbackSettings.tint, tinted);
+}
+// Directional and turning skins retain tint and collision geometry.
+for (const [direction, now] of [[-1, 200], [1, 201], [1, 234], [-1, 235], [0, 236]]) {
+    Ship.setDirection(feedbackScene.player, direction, now);
+    assert.equal(feedbackScene.player.tint, DamageFeedbackSettings.tint);
+    assert.deepEqual(playerGeometry(), undamagedGeometry);
+}
+// A second genuine life loss still counts while the pulse is active, but the
+// pulse does not restart or stack. Only the latest removed HUD icon flashes.
+tickFeedback(240);
+feedbackScene._damagePlayer();
+assert.equal(feedbackLives.filter(life => life.active).length, 1);
+assert.equal(rings.length, 1); assert(!feedbackLives[0].visible);
+assert(feedbackLives[1].visible && !feedbackLives[1].active);
+tickFeedback(250);
+assert.equal(feedbackScene.player.tint, undefined); assert(rings[0].destroyed);
+tickFeedback(540);
+assert(!feedbackLives[1].visible); assert.equal(feedbackLives[1].tint, undefined);
+
+// Fatal feedback finishes even though GAME OVER disables the avatar.
+feedbackScene._damagePlayer();
+assert.equal(feedbackScene.state, GameState.GameOver);
+assert(!feedbackScene.player.active); assert.equal(rings.length, 2);
+tickFeedback(840);
+assert(rings[1].destroyed); assert(!feedbackLives[2].visible);
+assert.equal(feedbackScene.player.tint, undefined);
+feedbackScene._damagePlayer(); assert.equal(rings.length, 2);
+feedbackScene.state = GameState.Playing; feedbackScene.player.active = true;
+feedbackScene._damagePlayer(); assert.equal(rings.length, 2, 'no remaining life means no feedback');
+
+// Restart cleanup restores tint, hides removed icons and cancels deadlines.
+feedback.show(feedbackLives[2]);
+const cancelledRing = rings[rings.length - 1];
+feedback.clear(); feedback.clear();
+assert(cancelledRing.destroyed); assert(!feedbackLives[2].visible);
+assert.equal(feedbackScene.player.tint, undefined);
+tickFeedback(2000); assert.equal(feedbackScene.player.tint, undefined);
+feedback.show(feedbackLives[2]);
+feedbackScene.events.emit('shutdown');
+assert(rings.every(ring => ring.destroyed));
+assert(!feedbackLives[2].visible); assert.equal(visualListeners.length, 0);
+assert.equal(feedbackScene.player.tint, undefined);
+feedback.destroy();
+
+// Use the real lives initialization/reset/recovery code and transition method.
+const recoveryScene = new MainScene();
+recoveryScene.game = { canvas: { width: 800, height: 600 } };
+recoveryScene.add = { text: () => ({ setText() { return this; }, setOrigin() { return this; } }) };
+let lifeIcons = [], livesGroupConfig;
+recoveryScene.physics = { add: { group(config) {
+    livesGroupConfig = config;
+    return {
+        clear() { lifeIcons.forEach(icon => icon.destroy()); lifeIcons = []; },
+        create(x, y, texture) { const icon = new Sprite(recoveryScene, x, y, texture).setVisible(true); lifeIcons.push(icon); return icon; },
+        countActive: () => lifeIcons.filter(icon => icon.active).length,
+        getFirstAlive: () => lifeIcons.find(icon => icon.active),
+        getLast: state => lifeIcons.slice().reverse().find(icon => icon.active === state),
+        getFirstDead: () => lifeIcons.find(icon => !icon.active)
+    };
+} } };
+let recoveryCalls = 0;
+const recoverOneLife = ScoreManager.prototype.recoverOneLife;
+ScoreManager.prototype.recoverOneLife = function() { recoveryCalls++; return recoverOneLife.call(this); };
+recoveryScene.scoreManager = new ScoreManager(recoveryScene);
+ScoreManager.prototype.recoverOneLife = recoverOneLife;
+recoveryScene.scoreManager.recoverOneLife = function() { recoveryCalls++; return recoverOneLife.call(this); };
+const lifeCount = () => recoveryScene.scoreManager.lives.countActive(true);
+assert.equal(MAX_LIVES, 3); assert.equal(livesGroupConfig.maxSize, MAX_LIVES);
+assert.equal(lifeCount(), 3); assert.equal(recoveryCalls, 0, 'initial Wave 1 does not grant recovery');
+assert(lifeIcons.every(icon => icon.visible !== false && icon.alpha === 0.6));
+recoveryScene.time = { now: 0 };
+recoveryScene.player = new Sprite(recoveryScene, 400, 500, 'ship');
+let activeRecoveryShots = 0, recoveryWaveSpawns = 0;
+recoveryScene.assetManager = {
+    bullets: { countActive: () => activeRecoveryShots }, reset() {}, gameOver() {}
+};
+recoveryScene.alienManager = { reset() { recoveryWaveSpawns++; }, stopMovement() {} };
+recoveryScene.sound = { play() {} };
+recoveryScene.state = GameState.Playing;
+recoveryScene._startNextWave();
+assert.equal(recoveryCalls, 0);
+// Regression: fixed slots [1,2,3] -> [2,3] -> [3] -> [2,3] -> [1,2,3].
+const initialIconGeometry = lifeIcons.map(icon => [icon.x, icon.y, icon.scaleX, icon.scaleY, icon.alpha, icon.texture.key]);
+function assertConsecutiveLives(expected) {
+    assert.equal(lifeCount(), expected);
+    const expectedSlots = [[], [3], [2, 3], [1, 2, 3]][expected];
+    assert.deepEqual(lifeIcons.map((icon, index) => icon.active ? index + 1 : null).filter(Boolean), expectedSlots);
+    assert.deepEqual(lifeIcons.map((icon, index) => icon.visible ? index + 1 : null).filter(Boolean), expectedSlots);
+    assert.deepEqual(lifeIcons.map(icon => [icon.x, icon.y, icon.scaleX, icon.scaleY, icon.alpha, icon.texture.key]), initialIconGeometry,
+        'icon positions, spacing, size, opacity and artwork stay unchanged');
+}
+assertConsecutiveLives(3);
+recoveryScene._damagePlayer(); assertConsecutiveLives(2);
+recoveryScene._damagePlayer(); assertConsecutiveLives(1);
+recoveryScene.scoreManager.recoverOneLife(); assertConsecutiveLives(2);
+recoveryScene.scoreManager.recoverOneLife(); assertConsecutiveLives(3);
+for (const [beforeRecovery, afterRecovery] of [[1, 2], [2, 3], [3, 3]]) {
+    recoveryScene.scoreManager.resetLives();
+    for (let i = beforeRecovery; i < MAX_LIVES; i++) {
+        recoveryScene.scoreManager.lives.getFirstAlive().setActive(false).setVisible(false);
+    }
+    const callsBefore = recoveryCalls, spawnsBefore = recoveryWaveSpawns;
+    recoveryScene.state = GameState.WaveTransition;
+    recoveryScene.nextWaveReadyAt = 1500;
+    recoveryScene.time.now = 1499;
+    recoveryScene._startNextWave();
+    assert.equal(lifeCount(), beforeRecovery, 'no recovery during the transition delay');
+    recoveryScene.time.now = 1500;
+    activeRecoveryShots = 1;
+    recoveryScene._startNextWave();
+    assert.equal(lifeCount(), beforeRecovery, 'wait for player shots to finish naturally');
+    activeRecoveryShots = 0;
+    recoveryScene._startNextWave();
+    assert.equal(lifeCount(), afterRecovery);
+    assert.equal(lifeIcons.filter(icon => icon.visible).length, afterRecovery, 'HUD reflects recovery immediately');
+    assertConsecutiveLives(afterRecovery);
+    assert(lifeIcons.filter(icon => icon.active).every(icon => icon.tint === undefined && icon.alpha === 0.6));
+    for (let i = 0; i < 100; i++) recoveryScene._startNextWave();
+    assert.equal(lifeCount(), afterRecovery, 'no duplicate recovery within a single transition');
+    assert.equal(recoveryCalls, callsBefore + 1);
+    assert.equal(recoveryWaveSpawns, spawnsBefore + 1);
+}
+recoveryScene.scoreManager.resetLives();
+for (let i = 0; i < MAX_LIVES; i++) recoveryScene._damagePlayer();
+assert.equal(recoveryScene.state, GameState.GameOver); assert.equal(lifeCount(), 0);
+assertConsecutiveLives(0);
+const callsAtGameOver = recoveryCalls, waveAtGameOver = recoveryScene.wave;
+recoveryScene.time.now = 10000;
+for (let i = 0; i < 5; i++) recoveryScene._startNextWave();
+assert.equal(lifeCount(), 0); assert.equal(recoveryCalls, callsAtGameOver);
+recoveryScene.scoreManager.recoverOneLife();
+assert.equal(lifeCount(), 0, 'recovery cannot revive a zero-life player');
+recoveryScene.state = GameState.WaveTransition;
+recoveryScene._startNextWave();
+assert.equal(recoveryScene.wave, waveAtGameOver, 'even a stale transition cannot start a wave at zero lives');
+assert.equal(lifeCount(), 0);
+recoveryScene.state = GameState.GameOver;
+const callsBeforeRecoveryRestart = recoveryCalls;
+recoveryScene.restart();
+assert.equal(lifeCount(), 3); assert.equal(recoveryScene.wave, 1);
+assert.equal(recoveryScene.state, GameState.Playing); assert(recoveryScene.player.active);
+assert.equal(recoveryCalls, callsBeforeRecoveryRestart, 'restart resets lives without a Wave 1 bonus');
+assert(lifeIcons.every(icon => icon.active && icon.visible !== false && icon.tint === undefined));
+assertConsecutiveLives(3);
+recoveryScene._startNextWave();
+assert.equal(lifeCount(), 3); assert.equal(recoveryCalls, callsBeforeRecoveryRestart);
 console.log('PASS: banana selection, fixed arcs, explosion-only damage, radius/window, single hits, animation and lifecycle cleanup; existing wave, movement, skin, DOGE and PEPE regressions.');
+console.log('PASS: shared DOGE feedback, damage gates, PEPE impact removal, directional tint, pulse coalescing, HUD life accounting, GAME OVER and shutdown cleanup.');
+console.log('PASS: capped new-wave life recovery (1 to 2, 2 to 3, 3 to 3), immediate HUD, transition gates, no duplicates or revival, initial Wave 1 and restart.');
+console.log('PASS: fixed HUD slots [1,2,3] -> [2,3] -> [3] -> [2,3] -> [1,2,3], zero lives and restart; lost leftmost icon retains damage flash.');

@@ -3,10 +3,7 @@ import { Bullet } from "../interface/bullet";
 import { AssetManager } from "../interface/manager/asset-manager";
 import { AlienManager } from "../interface/manager/alien-manager";
 import { Ship } from "../interface/ship";
-import {
-    AnimationFactory,
-    AnimationType,
-} from "../interface/factory/animation-factory";
+import { AnimationFactory } from "../interface/factory/animation-factory";
 import { Alien } from "../interface/alien";
 import { Kaboom } from "../interface/kaboom";
 import { EnemyBullet } from "../interface/enemy-bullet";
@@ -16,6 +13,7 @@ import { MemeSkins, SkinDefinition, PlayerPoses, preparePlayerPoses } from "../i
 import { PonkePoses, prepareEnemySkins } from "../interface/enemy-skins";
 import { EnemyType } from "../interface/enemy-type";
 import { BananaBombs } from "../interface/banana-bomb";
+import { DamageFeedback } from "../interface/damage-feedback";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -28,6 +26,7 @@ export class MainScene extends Phaser.Scene {
     private nextWaveReadyAt = 0;
     private pendingCleanup: Array<() => void> = [];
     private bananaBombs: BananaBombs;
+    private damageFeedback: DamageFeedback;
     starfield: Phaser.GameObjects.TileSprite;
     player: Phaser.Physics.Arcade.Sprite;
     alienManager: AlienManager;
@@ -85,7 +84,8 @@ export class MainScene extends Phaser.Scene {
         this.player = Ship.create(this);
         this.alienManager = new AlienManager(this);
         this.scoreManager = new ScoreManager(this);
-        this.bananaBombs = new BananaBombs(this, this.assetManager.explosions, () => this._damagePlayer(false));
+        this.damageFeedback = new DamageFeedback(this, this.player);
+        this.bananaBombs = new BananaBombs(this, this.assetManager.explosions, () => this._damagePlayer());
         this.events.once('shutdown', () => {
             this.bananaBombs.clear();
             this.pendingCleanup = [];
@@ -202,19 +202,13 @@ export class MainScene extends Phaser.Scene {
         this._damagePlayer();
     }
 
-    private _damagePlayer(showHitExplosion = true) {
+    private _damagePlayer() {
         if (this.state !== GameState.Playing || !this.player.active) return;
+        // Icons stay fixed: remove the leftmost active slot.
         let live: Phaser.GameObjects.Sprite = this.scoreManager.lives.getFirstAlive();
-        if (live) {
-            live.setActive(false).setVisible(false);
-        }
-
-        // Banana damage already has its landing explosion.
-        if (showHitExplosion) {
-            let explosion: Kaboom = this.assetManager.explosions.get();
-            explosion.setPosition(this.player.x, this.player.y);
-            explosion.play(AnimationType.Kaboom);
-        }
+        if (!live) return;
+        live.setActive(false).setVisible(false);
+        if (this.damageFeedback) this.damageFeedback.show(live);
         this.sound.play(SoundType.Kaboom)
         if (this.scoreManager.noMoreLives) {
             this._gameOver();
@@ -270,19 +264,22 @@ export class MainScene extends Phaser.Scene {
         // In-flight player shots finish naturally, including off-screen cleanup.
         // Wait at least 1.5 seconds and count active shots so inactive pooled
         // objects cannot block progression. Neither condition removes missiles.
-        if (this.state !== GameState.WaveTransition || this.time.now < this.nextWaveReadyAt ||
+        if (this.state !== GameState.WaveTransition || this.scoreManager.noMoreLives ||
+            this.time.now < this.nextWaveReadyAt ||
             this.assetManager.bullets.countActive(true) > 0) {
             return;
         }
         this.wave += 1;
         this.scoreManager.setWave(this.wave);
         this.alienManager.reset(this.wave);
+        this.scoreManager.recoverOneLife();
         this.scoreManager.hideText();
         this.firingTimer = this.time.now + 2000;
         this.state = GameState.Playing;
     }
 
     restart() {
+        if (this.damageFeedback) this.damageFeedback.clear();
         if (this.bananaBombs) this.bananaBombs.clear();
         this.pendingCleanup = [];
         this.nextWaveReadyAt = 0;

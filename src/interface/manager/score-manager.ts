@@ -1,6 +1,8 @@
 import { AssetType } from "../assets";
 import { applySkinAppearance, MemeSkins } from "../skins";
 
+export const MAX_LIVES = 3;
+
 export class ScoreManager {
   scoreText: Phaser.GameObjects.Text;
   waveText: Phaser.GameObjects.Text;
@@ -58,7 +60,7 @@ export class ScoreManager {
   ) {
     this._scene.add.text(SIZE_X - 100, 16, `LIVES`, textConfig);
     this.lives = this._scene.physics.add.group({
-      maxSize: 3,
+      maxSize: MAX_LIVES,
       runChildUpdate: true,
     });
     this.resetLives();
@@ -67,7 +69,7 @@ export class ScoreManager {
   resetLives() {
     let SIZE_X = this._scene.game.canvas.width;
     this.lives.clear(true, true)
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < MAX_LIVES; i++) {
       let ship: Phaser.GameObjects.Sprite = this.lives.create(
         SIZE_X - 100 + 30 * i,
         60,
@@ -77,6 +79,14 @@ export class ScoreManager {
       ship.setOrigin(0.5, 0.5);
       ship.setAlpha(0.6);
     }
+  }
+
+  recoverOneLife() {
+    const remaining = this.lives.countActive(true);
+    if (remaining === 0 || remaining >= MAX_LIVES) return;
+    // Restore the inactive slot immediately left of the remaining icons.
+    const life: Phaser.GameObjects.Sprite = this.lives.getLast(false);
+    if (life) life.clearTint().setActive(true).setVisible(true);
   }
 
   setWave(wave: number) {
