@@ -30,6 +30,7 @@ export default {
 
         //  Toggle the booleans here to enable / disable Phaser 3 features:
         replace({
+            '__NFD_DEV__': JSON.stringify(true),
             'typeof CANVAS_RENDERER': JSON.stringify(true),
             'typeof WEBGL_RENDERER': JSON.stringify(true),
             'typeof EXPERIMENTAL': JSON.stringify(false),

@@ -101,6 +101,7 @@ function load(relative) {
     return module.exports;
 }
 const { MainScene } = load('src/scenes/main.ts');
+const { WojakBoss, WojakSettings, WojakPoses, WojakPhase, WojakDevelopment, shouldStartWojakTest, WOJAK_TRIGGER_AFTER_WAVE } = load('src/interface/wojak-boss.ts');
 const { GameState } = load('src/interface/game-state.ts');
 const { ScoreManager, MAX_LIVES } = load('src/interface/manager/score-manager.ts');
 const { AlienManager } = load('src/interface/manager/alien-manager.ts');
@@ -146,6 +147,7 @@ preloadScene.load = {
     audio() {}
 };
 preloadScene.preload();
+WojakPoses.forEach(pose => assert(textureRequests.some(request => request.asset === pose.asset && request.url === pose.path)));
 for (const direction of ['left', 'right']) {
     assert(textureRequests.some(request => request.asset === `elon-ally-${direction}` &&
         request.url === `meme-skins/elon-ally-${direction}.png`));
@@ -468,7 +470,9 @@ drive(2740, true, false, 'ship-turn-left');  // Releasing right does not restart
 drive(2753, true, false, 'ship-left');
 drive(2850, false, false, 'ship');
 
+// These normal-wave regressions isolate progression after the one-off boss.
 const scene = new MainScene();
+scene.wojakCompleted = true;
 scene.state = GameState.Playing;
 scene.player = new Sprite(scene);
 scene.starfield = { tilePositionY: 0 };
@@ -1381,6 +1385,7 @@ feedback.destroy();
 
 // Use the real lives initialization/reset/recovery code and transition method.
 const recoveryScene = new MainScene();
+recoveryScene.wojakCompleted = true; // Isolate ordinary new-wave life recovery.
 recoveryScene.game = { canvas: { width: 800, height: 600 } };
 recoveryScene.add = { image: (x, y, key) => uiImage(recoveryScene, x, y, key) };
 let uiShutdownListeners = [];
@@ -2291,6 +2296,211 @@ for (const text of ['10', '9', '8', '3', '1']) {
 goldenReference.destroy(); redReference.destroy();
 assert.equal(coloredFonts.size, 10, 'refreshes and countdown changes reuse the same palette cache');
 assert(bonusGraphics.every(graphic => graphic.destroyed)); assert(bonusDigits.every(digit => digit.destroyed));
+// Wojak uses the actual supplied PNGs and a real Arcade physics rectangle.
+const wojakImages = new Map(WojakPoses.map(pose => {
+    const png = decodePng(fs.readFileSync(path.resolve(__dirname, '../assets', pose.path)));
+    assert.equal(png.width, 1536); assert.equal(png.height, 1024);
+    assert(png.pixels.some((value, i) => i % 4 === 3 && value === 0));
+    assert(png.pixels.some((value, i) => i % 4 === 3 && value > 0 && value < 255));
+    return [pose.asset, png];
+}));
+const wojakSprites = [];
+function createWojakSprite(scene, x, y, key) {
+    const sprite = new Sprite(scene, x, y, key), image = wojakImages.get(key);
+    sprite.width = image.width; sprite.height = image.height; sprite.angle = 0;
+    sprite.body = new ArcadeBody(scene.physics.world, sprite);
+    sprite.setImmovable = value => { sprite.body.immovable = value; return sprite; };
+    wojakSprites.push(sprite); return sprite;
+}
+const wojakUnitScene = { physics: { world: { defaults: {}, bounds: new Phaser.Geom.Rectangle(0, 0, 800, 600) } } };
+wojakUnitScene.physics.add = { sprite: (x, y, key) => createWojakSprite(wojakUnitScene, x, y, key) };
+const unitWojak = new WojakBoss(wojakUnitScene);
+unitWojak.start(); const firstWojak = unitWojak.sprite;
+assert(firstWojak.getBounds().bottom < 0, 'entrance starts completely offscreen');
+near(firstWojak.width * firstWojak.scaleX, 337.92); near(firstWojak.height * firstWojak.scaleY, 225.28);
+assert(firstWojak.body.immovable); assert.equal(firstWojak.body.moves, false);
+assert.equal(unitWojak.portfolio, 50); assert.equal(unitWojak.hit(), false);
+unitWojak.update(1499); assert.equal(unitWojak.phase, WojakPhase.Entrance);
+unitWojak.update(1); assert.equal(unitWojak.phase, WojakPhase.Patrol);
+near(firstWojak.y, WojakSettings.patrolY); near(firstWojak.x, 400);
+unitWojak.update(500); near(firstWojak.x, 427.5); near(firstWojak.y, WojakSettings.patrolY + 7);
+let wojakReversals = 0;
+for (let frame = 0; frame < 500; frame++) {
+    const x = firstWojak.x, direction = unitWojak.direction;
+    unitWojak.update(77);
+    if (direction !== unitWojak.direction) wojakReversals++;
+    assert(Math.abs(firstWojak.x - x) <= 55 * 0.077 + 1e-7, 'no reversal jump');
+    assert(firstWojak.x >= 205 && firstWojak.x <= 595);
+    assert(firstWojak.getBounds().left >= 0 && firstWojak.getBounds().right <= 800);
+    assert(firstWojak.getBounds().top > 89.5, 'below buff and fixed HUD');
+    assert(firstWojak.y >= 248 && firstWojak.y <= 262);
+    near(firstWojak.body.width, 270); near(firstWojak.body.height, 82);
+    near(firstWojak.body.left, firstWojak.x - 135); near(firstWojak.body.top, firstWojak.y - 41);
+    assert(!firstWojak.flipX, 'right-facing artwork is never flipped');
+}
+assert(wojakReversals >= 4);
+const initialWojakChanges = firstWojak.textureChanges;
+for (let hit = 1; hit <= 25; hit++) {
+    const before = [firstWojak.x, firstWojak.y, unitWojak.direction, unitWojak.patrolElapsed];
+    assert(unitWojak.hit()); assert.equal(unitWojak.portfolio, 50 - hit);
+    const pose = WojakPoses[hit < 10 ? 0 : hit < 25 ? 1 : 2];
+    assert.equal(firstWojak.texture.key, pose.asset);
+    assert.equal(firstWojak.textureChanges, initialWojakChanges + (hit >= 10 ? 1 : 0) + (hit >= 25 ? 1 : 0));
+    assert.deepEqual([firstWojak.x, firstWojak.y, unitWojak.direction, unitWojak.patrolElapsed], before);
+    near(firstWojak.scaleX, firstWojak.scaleY);
+    near(pose.chassisWidth * firstWojak.scaleX, 1410 * 0.22);
+    near(firstWojak.body.width, 270); near(firstWojak.body.height, 82);
+    near(firstWojak.body.left, firstWojak.x - 135); near(firstWojak.body.top, firstWojak.y - 41);
+    assert(firstWojak.getBounds().left >= 0 && firstWojak.getBounds().right <= 800);
+}
+assert.equal(unitWojak.phase, WojakPhase.Complete); assert.equal(unitWojak.hit(), false);
+assert.equal(unitWojak.update(1249), false); assert(!firstWojak.destroyed);
+assert.equal(unitWojak.update(1), true); assert(firstWojak.destroyed);
+assert.equal(unitWojak.update(10000), false, 'completion fires once'); unitWojak.clear();
+assert.equal(WojakDevelopment.startAtEncounter, false);
+assert.equal(shouldStartWojakTest(true), false);
+WojakDevelopment.startAtEncounter = true;
+assert.equal(shouldStartWojakTest(false), false, 'production never enables the shortcut');
+assert.equal(shouldStartWojakTest(true), true); WojakDevelopment.startAtEncounter = false;
+assert(fs.readFileSync(path.resolve(__dirname, '../rollup.config.dist.js'), 'utf8').includes("'__NFD_DEV__': JSON.stringify(false)"));
+
+// Actual MainScene progression: Wave 1 -> entrance -> patrol -> hold -> Wave 2.
+assert.equal(WOJAK_TRIGGER_AFTER_WAVE, 1);
+assert.equal(WojakSettings.afterWave, WOJAK_TRIGGER_AFTER_WAVE);
+const encounter = new MainScene(), encounterShots = [], encounterWaves = [];
+let encounterInvaders = [], encounterLifeRecoveries = 0, encounterLives = 2, encounterOverlap = false;
+encounter.events = new EventEmitter(); encounter.game = { canvas: { width: 800, height: 600 }, loop: { time: 1000 } };
+encounter.sys = { events: encounter.events, game: encounter.game };
+encounter.time = new Clock(encounter); encounter.events.emit('boot'); encounter.events.emit('start');
+encounter.state = GameState.Playing; encounter.wave = WOJAK_TRIGGER_AFTER_WAVE;
+encounter.player = new Sprite(encounter, 400, 550);
+encounter.starfield = { tilePositionY: 0 }; encounter.firingTimer = Infinity;
+encounter._shipKeyboardHandler = () => {};
+encounter.add = bonusScene.add; encounter.textures = fontTextures;
+encounter.sound = { play() {} };
+encounter.physics = { world: { defaults: {}, bounds: new Phaser.Geom.Rectangle(0, 0, 800, 600) },
+    add: { sprite: (x, y, key) => createWojakSprite(encounter, x, y, key) },
+    overlap(shots, targets, callback, process, context) {
+        if (encounter.state !== GameState.BossEncounter || !targets[0]) return;
+        assert.equal(targets[0], encounter.wojak.sprite, 'only boss collision is evaluated during encounter');
+        encounterOverlap = true;
+        const b = targets[0].body;
+        shots.forEach(shot => {
+            if (!shot.active) return;
+            shot.body.preUpdate(false, 0);
+            const a = shot.body;
+            if (a.right >= b.left && a.left <= b.right && a.bottom >= b.top && a.top <= b.bottom) {
+                callback.call(context, shot, targets[0]); callback.call(context, shot, targets[0]);
+                assert(!shot.destroyed, 'destruction waits until overlap iteration completes');
+            }
+        });
+        encounterOverlap = false;
+    }
+};
+encounter.assetManager = { bullets: {
+    get() {
+        const shot = new Bullet(encounter); shot.angle = 0;
+        shot.body = new ArcadeBody(encounter.physics.world, shot);
+        shot.setVelocityY = value => { shot.body.velocity.y = value; return shot; };
+        const destroy = shot.destroy.bind(shot);
+        shot.destroy = () => { assert(!encounterOverlap); destroy(); };
+        encounterShots.push(shot); return shot;
+    }, getChildren: () => encounterShots, countActive: () => encounterShots.filter(shot => shot.active).length
+}, enemyBullets: { clear() { assert(!encounterOverlap); } }, explosions: { get: () => new Sprite(encounter) },
+    reset() { encounterShots.forEach(shot => shot.destroy()); }, gameOver() { encounterShots.forEach(shot => shot.destroy()); } };
+encounter.alienManager = { aliens: { getChildren: () => encounterInvaders, clear() { encounterInvaders = []; } },
+    hasAliveAliens: false, stopMovement() {}, getRandomAliveEnemy: () => null,
+    update() { assert.notEqual(encounter.state, GameState.BossEncounter); return false; },
+    reset(wave) { encounterWaves.push(wave); encounterInvaders = getWaveConfiguration(wave).enemies; }
+};
+let encounterHudWave = WOJAK_TRIGGER_AFTER_WAVE, encounterAnnouncement = '';
+encounter.scoreManager = { noMoreLives: false, increaseScore() {}, setHighScore() {},
+    resetLives() { encounterLives = 3; }, setWave(wave) { encounterHudWave = wave; },
+    hideText() { encounterAnnouncement = ''; }, setWaveText(wave) { encounterAnnouncement = `WAVE ${wave}`; },
+    setGameOverText() { encounterAnnouncement = 'GAME OVER'; },
+    recoverOneLife() { encounterLifeRecoveries++; encounterLives = Math.min(3, encounterLives + 1); } };
+let encounterAllyClears = 0;
+encounter.elonAlly = { clear() { encounterAllyClears++; }, startWave() {}, update() {}, tryHit: () => false };
+encounter.bananaBombs = { clear() {}, update() {} };
+encounter.rapidFire = new RapidFire(encounter, (oldInterval, newInterval) => { encounter.bulletTime += newInterval - oldInterval; },
+    () => encounter.playerShootingEnabled);
+const stepEncounter = delta => {
+    encounter.events.emit('preupdate'); encounter.events.emit('update', encounter.time.now + delta, delta);
+    encounter.update(encounter.time.now, delta); encounter.events.emit('postupdate');
+};
+encounter.rapidFire.activate();
+const trailingEncounterShot = encounter.assetManager.bullets.get(); trailingEncounterShot.shoot(700, 500);
+encounter._bulletHitAliens(new Sprite(encounter), { active: true, kill() {}, destroy() {} });
+assert.equal(encounter.state, GameState.WaveTransition); assert.equal(encounterAnnouncement, '');
+const triggerWaveCleanup = encounter.pendingCleanup; encounter.pendingCleanup = []; triggerWaveCleanup.forEach(fn => fn());
+stepEncounter(2000);
+assert.equal(encounter.wojak, undefined, 'natural trailing missiles delay boss entrance');
+trailingEncounterShot.y = -37; trailingEncounterShot.update();
+encounter._startNextWave();
+assert.equal(encounter.state, GameState.BossEncounter); assert.equal(encounterInvaders.length, 0);
+assert.equal(encounter.wave, 1); assert.equal(encounterHudWave, 1); assert.equal(encounterWaves.length, 0);
+const encounterSprite = encounter.wojak.sprite;
+encounter._startNextWave(); encounter._startWojak(); assert.equal(encounter.wojak.sprite, encounterSprite);
+const entranceShotCount = encounterShots.length;
+encounter._fireBullet(); assert.equal(encounterShots.length, entranceShotCount);
+stepEncounter(1499); assert.equal(encounter.playerShootingEnabled, false);
+stepEncounter(1); assert.equal(encounter.playerShootingEnabled, true);
+assert.equal(encounter.rapidFire.timer.getElapsed(), 0, 'boost freezes through Wave 1 announcement and boss entrance');
+assert(encounterAllyClears >= 1);
+stepEncounter(100); near(encounter.rapidFire.timer.getElapsed(), 100);
+encounter._fireBullet(); assert.equal(encounterShots[encounterShots.length - 1].texture.key, 'rapid-electric-laser');
+// This real shot misses the hull; it must remain alive and not count as damage.
+const miss = encounterShots[encounterShots.length - 1];
+miss.setPosition(encounter.wojak.sprite.x, encounter.wojak.sprite.y - 90); stepEncounter(0);
+assert(miss.active); assert.equal(encounter.wojak.portfolio, 50);
+for (let hit = 1; hit <= 25; hit++) {
+    const shot = encounter.assetManager.bullets.get();
+    shot.shoot(encounter.wojak.sprite.x, encounter.wojak.sprite.y, hit % 2 === 0);
+    near(shot.body.width, 6); near(shot.body.height, 36); near(shot.body.velocity.y, -400);
+    stepEncounter(0); assert(shot.destroyed); assert.equal(encounter.wojak.portfolio, 50 - hit);
+}
+assert.equal(encounter.wave, 1); assert.equal(encounterHudWave, 1);
+assert.equal(encounter.wojak.phase, WojakPhase.Complete); assert.equal(encounter.playerShootingEnabled, false);
+const excess = encounter.assetManager.bullets.get(); excess.shoot(encounterSprite.x, encounterSprite.y, true);
+const finalElapsed = encounter.rapidFire.timer.getElapsed();
+stepEncounter(1249); assert(!encounterSprite.destroyed); assert(excess.active);
+assert.equal(encounter.wojak.portfolio, 25); near(encounter.rapidFire.timer.getElapsed(), finalElapsed);
+stepEncounter(1); assert(encounterSprite.destroyed); assert.equal(encounter.state, GameState.WaveTransition);
+assert.equal(encounter.wave, 1); assert.equal(encounterWaves.length, 0);
+assert.equal(encounterAnnouncement, 'WAVE 2'); encounter._startNextWave(); assert.equal(encounter.wave, 1);
+encounterShots.filter(shot => shot.active).forEach(shot => { shot.y = -37; shot.update(); });
+encounter._startNextWave(); encounter._startNextWave();
+assert.equal(encounter.wave, 2); assert.equal(encounterHudWave, 2); assert.deepEqual(encounterWaves, [2]);
+assert.equal(encounterInvaders.length, 24); assert(encounterInvaders.every(type => type === EnemyType.Pepe));
+assert.equal(encounterLifeRecoveries, 1); assert.equal(encounterLives, 3); assert(encounter.wojakCompleted);
+assert(encounter.rapidFire.active); assert.equal(encounter.state, GameState.Playing);
+const spritesAfterEncounter = wojakSprites.length;
+for (let nextWave = 3; nextWave <= 11; nextWave++) {
+    encounter._bulletHitAliens(new Sprite(encounter), { active: true, kill() {}, destroy() {} });
+    const cleanup = encounter.pendingCleanup; encounter.pendingCleanup = []; cleanup.forEach(fn => fn());
+    stepEncounter(1500); encounter._startNextWave();
+    assert.equal(encounter.wave, nextWave); assert.equal(encounterHudWave, nextWave);
+    assert.equal(encounter.state, GameState.Playing);
+    assert.equal(encounter.wojak.sprite, undefined);
+    assert.equal(wojakSprites.length, spritesAfterEncounter, 'no second boss, including the old Wave 10 trigger');
+    assert.equal(encounterInvaders.length, 24);
+    assert(encounterInvaders.every(type => type === (nextWave % 2 ? EnemyType.Ponke : EnemyType.Pepe)));
+}
+assert.deepEqual(encounterWaves, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+for (const phase of [WojakPhase.Entrance, WojakPhase.Patrol, WojakPhase.Complete]) {
+    encounter.wave = WOJAK_TRIGGER_AFTER_WAVE; encounter._startWojak();
+    if (phase !== WojakPhase.Entrance) encounter.wojak.update(1500);
+    if (phase === WojakPhase.Complete) for (let hit = 0; hit < 25; hit++) encounter.wojak.hit();
+    const sprite = encounter.wojak.sprite; assert.equal(encounter.wojak.phase, phase);
+    encounter._gameOver(); assert(sprite.destroyed); assert.equal(encounter.wojak.phase, WojakPhase.Removed);
+    encounter.restart(); assert.equal(encounter.wave, 1); assert.equal(encounterLives, 3);
+    assert.equal(encounter.wojakCompleted, false); assert.equal(encounter.wojak.sprite, undefined);
+    assert.equal(encounter.rapidFire.active, false); stepEncounter(2000);
+    assert.equal(encounter.state, GameState.Playing); assert.equal(encounter.wojak.sprite, undefined);
+}
+encounter.events.emit('shutdown');
+assert(wojakSprites.every(sprite => sprite.destroyed));
+console.log('PASS: Wojak entrance/patrol/bounds, milestone-only art at hits 10/25, 1-point blue/electric hits with deferred single consumption, Wave 1-only trigger/numbering, final hold, Wave 2/life recovery, boost pausing and GAME OVER/restart cleanup.');
 console.log('PASS: electric-red buff ring at all durations, red NFD digit palettes with identical alpha/shapes/layout, original golden HUD preserved, per-buff colors, unchanged wave pause/resume and expiration.');
 console.log('PASS: immediate Elon rapid fire (200ms / 1.5), exact 10s usable-gameplay timer, frozen announcement ring/digits, pause/timeScale, refresh, six-frame 14fps electric lasers with unchanged 6x36 bodies, no DOGE aura or runtime glow, preserved damage flash, expiration/restart/shutdown cleanup.');
 console.log('PASS: directional ally hit textures/bounds, misses, single player-shot consumption, enemy exclusion, stationary HIT, 250ms blue pulses, exact 1000ms HIT, aligned accelerating escape, wave/GAME OVER/restart and stale-deadline cleanup.');

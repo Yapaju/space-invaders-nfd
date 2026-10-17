@@ -17,6 +17,7 @@ import { DamageFeedback } from "../interface/damage-feedback";
 import { GoldenUiAssets } from "../interface/golden-number";
 import { ElonAlly } from "../interface/elon-ally";
 import { RapidFire, RapidFireSettings } from "../interface/rapid-fire";
+import { WojakBoss, WojakPoses, WojakSettings, shouldStartWojakTest } from "../interface/wojak-boss";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -32,6 +33,8 @@ export class MainScene extends Phaser.Scene {
     private damageFeedback: DamageFeedback;
     private elonAlly: ElonAlly;
     private rapidFire: RapidFire;
+    private wojak: WojakBoss;
+    private wojakCompleted = false;
     starfield: Phaser.GameObjects.TileSprite;
     player: Phaser.Physics.Arcade.Sprite;
     alienManager: AlienManager;
@@ -53,6 +56,7 @@ export class MainScene extends Phaser.Scene {
         });
         this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
         this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
+        WojakPoses.forEach(pose => this.load.image(pose.asset, pose.path));
         this.load.image(AssetType.ElonRight, "meme-skins/elon-ally-right.png");
         this.load.image(AssetType.ElonLeft, "meme-skins/elon-ally-left.png");
         this.load.image(AssetType.ElonHitRight, "meme-skins/elon-ally-hit-right.png");
@@ -114,6 +118,8 @@ export class MainScene extends Phaser.Scene {
         this.events.once('shutdown', () => {
             this.bananaBombs.clear();
             this.elonAlly.clear();
+            if (this.wojak) this.wojak.clear();
+            this.wojakCompleted = false;
             this.alienManager.onDescent = undefined;
             this.pendingCleanup = [];
         });
@@ -123,6 +129,11 @@ export class MainScene extends Phaser.Scene {
                 this.restart();
             }
         })
+        if (shouldStartWojakTest(typeof __NFD_DEV__ !== 'undefined' && __NFD_DEV__)) {
+            this.wave = WojakSettings.afterWave;
+            this.scoreManager.setWave(this.wave);
+            this._startWojak();
+        }
     }
 
     update(time?: number, delta = 0) {
@@ -134,6 +145,22 @@ export class MainScene extends Phaser.Scene {
         if (this.rapidFire) this.rapidFire.update();
         if (this.state === GameState.WaveTransition) {
             this._startNextWave();
+        }
+        if (this.state === GameState.BossEncounter) {
+            const complete = this.wojak.update(delta);
+            if (complete) {
+                this.wojakCompleted = true;
+                this.state = GameState.WaveTransition;
+                this.nextWaveReadyAt = this.time.now;
+                this.scoreManager.setWaveText(this.wave + 1);
+            }
+            this._shipKeyboardHandler();
+            if (!complete) this.physics.overlap(this.assetManager.bullets.getChildren(),
+                [this.wojak.sprite], this._bulletHitWojak, null, this);
+            const cleanup = this.pendingCleanup;
+            this.pendingCleanup = [];
+            cleanup.forEach(action => action());
+            return;
         }
         if (this.state === GameState.Playing && this.elonAlly) this.elonAlly.update(delta);
         if (this.state === GameState.Playing &&
@@ -223,7 +250,8 @@ export class MainScene extends Phaser.Scene {
             this.scoreManager.increaseScore(1000);
             this.state = GameState.WaveTransition;
             this.nextWaveReadyAt = this.time.now + 1500;
-            this.scoreManager.setWaveText(this.wave + 1);
+            if (this.wave === WojakSettings.afterWave && !this.wojakCompleted) this.scoreManager.hideText();
+            else this.scoreManager.setWaveText(this.wave + 1);
             this.pendingCleanup.push(() => {
                 this.assetManager.enemyBullets.clear(true, true);
                 if (this.bananaBombs) this.bananaBombs.clear();
@@ -242,6 +270,12 @@ export class MainScene extends Phaser.Scene {
         this._damagePlayer();
     }
 
+    private _bulletHitWojak(bullet: Bullet) {
+        if (this.state !== GameState.BossEncounter || !bullet.active || !this.wojak.hit()) return;
+        bullet.disableBody(true, true);
+        this.pendingCleanup.push(() => bullet.destroy());
+    }
+
     private _damagePlayer() {
         if (this.state !== GameState.Playing || !this.player.active) return;
         // Icons stay fixed: remove the leftmost active slot.
@@ -257,6 +291,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _gameOver() {
+        if (this.wojak) this.wojak.clear();
         if (this.rapidFire) this.rapidFire.clear();
         this.state = GameState.GameOver;
         this.scoreManager.setGameOverText();
@@ -289,7 +324,8 @@ export class MainScene extends Phaser.Scene {
     }
 
     private get playerShootingEnabled() {
-        return this.state === GameState.Playing && this.player.active;
+        return (this.state === GameState.Playing ||
+            (this.state === GameState.BossEncounter && this.wojak && this.wojak.shootingEnabled)) && this.player.active;
     }
 
     private _fireBullet() {
@@ -315,6 +351,10 @@ export class MainScene extends Phaser.Scene {
             this.assetManager.bullets.countActive(true) > 0) {
             return;
         }
+        if (this.wave === WojakSettings.afterWave && !this.wojakCompleted) {
+            this._startWojak();
+            return;
+        }
         this.wave += 1;
         this.scoreManager.setWave(this.wave);
         this.alienManager.reset(this.wave);
@@ -325,7 +365,22 @@ export class MainScene extends Phaser.Scene {
         this.state = GameState.Playing;
     }
 
+    private _startWojak() {
+        if (this.state === GameState.BossEncounter) return;
+        this.state = GameState.BossEncounter;
+        this.alienManager.stopMovement();
+        this.alienManager.aliens.clear(true, true);
+        this.assetManager.enemyBullets.clear(true, true);
+        if (this.bananaBombs) this.bananaBombs.clear();
+        if (this.elonAlly) this.elonAlly.clear();
+        this.scoreManager.hideText();
+        if (!this.wojak) this.wojak = new WojakBoss(this);
+        this.wojak.start();
+    }
+
     restart() {
+        if (this.wojak) this.wojak.clear();
+        this.wojakCompleted = false;
         if (this.rapidFire) this.rapidFire.clear();
         if (this.elonAlly) this.elonAlly.clear();
         if (this.damageFeedback) this.damageFeedback.clear();
