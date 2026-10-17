@@ -15,6 +15,7 @@ import { EnemyType } from "../interface/enemy-type";
 import { BananaBombs } from "../interface/banana-bomb";
 import { DamageFeedback } from "../interface/damage-feedback";
 import { GoldenUiAssets } from "../interface/golden-number";
+import { ElonAlly } from "../interface/elon-ally";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -28,6 +29,7 @@ export class MainScene extends Phaser.Scene {
     private pendingCleanup: Array<() => void> = [];
     private bananaBombs: BananaBombs;
     private damageFeedback: DamageFeedback;
+    private elonAlly: ElonAlly;
     starfield: Phaser.GameObjects.TileSprite;
     player: Phaser.Physics.Arcade.Sprite;
     alienManager: AlienManager;
@@ -46,6 +48,12 @@ export class MainScene extends Phaser.Scene {
         this.load.image(AssetType.Bullet, "images/bullet.png");
         this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
         this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
+        this.load.image(AssetType.ElonRight, "meme-skins/elon-ally-right.png");
+        this.load.image(AssetType.ElonLeft, "meme-skins/elon-ally-left.png");
+        this.load.image(AssetType.ElonHitRight, "meme-skins/elon-ally-hit-right.png");
+        this.load.image(AssetType.ElonHitLeft, "meme-skins/elon-ally-hit-left.png");
+        this.load.image(AssetType.ElonEscapeRight, "meme-skins/elon-ally-escape-right.png");
+        this.load.image(AssetType.ElonEscapeLeft, "meme-skins/elon-ally-escape-left.png");
         GoldenUiAssets.forEach(asset => this.load.image(asset.key, asset.path));
         Object.keys(MemeSkins).forEach(key => {
             const skin = MemeSkins[key] as SkinDefinition;
@@ -88,8 +96,15 @@ export class MainScene extends Phaser.Scene {
         this.scoreManager = new ScoreManager(this);
         this.damageFeedback = new DamageFeedback(this, this.player);
         this.bananaBombs = new BananaBombs(this, this.assetManager.explosions, () => this._damagePlayer());
+        this.elonAlly = new ElonAlly(this);
+        this.elonAlly.startWave(this.wave);
+        this.alienManager.onDescent = count => {
+            if (this.state === GameState.Playing) this.elonAlly.onDescent(count);
+        };
         this.events.once('shutdown', () => {
             this.bananaBombs.clear();
+            this.elonAlly.clear();
+            this.alienManager.onDescent = undefined;
             this.pendingCleanup = [];
         });
 
@@ -109,6 +124,7 @@ export class MainScene extends Phaser.Scene {
         if (this.state === GameState.WaveTransition) {
             this._startNextWave();
         }
+        if (this.state === GameState.Playing && this.elonAlly) this.elonAlly.update(delta);
         if (this.state === GameState.Playing &&
             this.alienManager.update(delta, (this.player.body as Phaser.Physics.Arcade.Body).top)) {
             this._gameOver();
@@ -132,6 +148,15 @@ export class MainScene extends Phaser.Scene {
             null,
             this
         );
+
+        if (this.state === GameState.Playing && this.elonAlly) {
+            this.assetManager.bullets.getChildren().forEach((bullet: Bullet) => {
+                if (bullet.active && this.elonAlly.tryHit(bullet.body as Phaser.Physics.Arcade.Body)) {
+                    bullet.disableBody(true, true);
+                    this.pendingCleanup.push(() => bullet.destroy());
+                }
+            });
+        }
 
         this.physics.overlap(
             this.assetManager.enemyBullets,
@@ -190,6 +215,7 @@ export class MainScene extends Phaser.Scene {
             this.pendingCleanup.push(() => {
                 this.assetManager.enemyBullets.clear(true, true);
                 if (this.bananaBombs) this.bananaBombs.clear();
+                if (this.elonAlly) this.elonAlly.clear();
                 this.alienManager.stopMovement();
             });
         }
@@ -225,6 +251,7 @@ export class MainScene extends Phaser.Scene {
         this.player.disableBody(true, true);
         this.alienManager.stopMovement();
         if (this.bananaBombs) this.bananaBombs.clear();
+        if (this.elonAlly) this.elonAlly.clear();
     }
 
     private _enemyFires() {
@@ -274,6 +301,7 @@ export class MainScene extends Phaser.Scene {
         this.wave += 1;
         this.scoreManager.setWave(this.wave);
         this.alienManager.reset(this.wave);
+        if (this.elonAlly) this.elonAlly.startWave(this.wave);
         this.scoreManager.recoverOneLife();
         this.scoreManager.hideText();
         this.firingTimer = this.time.now + 2000;
@@ -281,6 +309,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     restart() {
+        if (this.elonAlly) this.elonAlly.clear();
         if (this.damageFeedback) this.damageFeedback.clear();
         if (this.bananaBombs) this.bananaBombs.clear();
         this.pendingCleanup = [];
@@ -298,6 +327,7 @@ export class MainScene extends Phaser.Scene {
         this.scoreManager.hideText();
         this.alienManager.reset(this.wave);
         this.assetManager.reset();
+        if (this.elonAlly) this.elonAlly.startWave(this.wave);
         this.bulletTime = this.time.now;
         this.firingTimer = this.time.now + 2000;
     }

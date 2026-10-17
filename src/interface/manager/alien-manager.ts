@@ -7,6 +7,8 @@ export class AlienManager {
     readonly columnSpacing = 88;
     readonly rowSpacing = 74;
     readonly descentStep = 25;
+    descentCount = 0;
+    onDescent: (count: number) => void;
     private direction = 1;
     private movementStopped = false;
     private speed = 100;
@@ -36,6 +38,7 @@ export class AlienManager {
     reset(wave = 1) {
         this.stopMovement();
         this.direction = 1;
+        this.descentCount = 0;
         this._sortAliens(wave);
         const duration = Math.max(600, 2000 / (1 + 0.10 * (wave - 1)));
         // Preserve v0.1's speed: 200 pixels over the scaled duration.
@@ -78,12 +81,14 @@ export class AlienManager {
                 break;
             }
             this._move(aliens, 0, this.descentStep);
+            this.descentCount += 1;
             this.direction *= -1;
             aliens.forEach(alien => alien.setDirection(this.direction));
             if (reachedPlayer()) {
                 this.stopMovement();
                 return true;
             }
+            if (this.onDescent) this.onDescent(this.descentCount);
         }
         return false;
     }

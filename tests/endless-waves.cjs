@@ -56,6 +56,7 @@ class Sprite {
     get top() { return this.getBounds().top; }
     get displayOriginX() { return this.originX * this.width; }
     get displayOriginY() { return this.originY * this.height; }
+    get displayOriginY() { return this.originY * this.height; }
     setImmovable() { return this; }
     getBounds() {
         const left = this.x - this.width * this.scaleX * this.originX;
@@ -108,6 +109,7 @@ const { Kaboom } = load('src/interface/kaboom.ts');
 const { AnimationFactory } = load('src/interface/factory/animation-factory.ts');
 const { DamageFeedback, DamageFeedbackSettings } = load('src/interface/damage-feedback.ts');
 const { GoldenNumber, GoldenUiAssets, UiDepth, UiTexture } = load('src/interface/golden-number.ts');
+const { ElonAlly, ElonState, ElonSettings, ElonAppearancePresets, ELON_VISUAL_TEST_OVERRIDE, selectElonDescent, ElonCarRegistration } = load('src/interface/elon-ally.ts');
 const uiDimensions = new Map(GoldenUiAssets.map(asset => {
     const png = fs.readFileSync(path.resolve(__dirname, '../assets', asset.path));
     return [asset.key, [png.readUInt32BE(16), png.readUInt32BE(20)]];
@@ -133,6 +135,14 @@ preloadScene.load = {
     audio() {}
 };
 preloadScene.preload();
+for (const direction of ['left', 'right']) {
+    assert(textureRequests.some(request => request.asset === `elon-ally-${direction}` &&
+        request.url === `meme-skins/elon-ally-${direction}.png`));
+    assert(textureRequests.some(request => request.asset === `elon-ally-hit-${direction}` &&
+        request.url === `meme-skins/elon-ally-hit-${direction}.png`));
+    assert(textureRequests.some(request => request.asset === `elon-ally-escape-${direction}` &&
+        request.url === `meme-skins/elon-ally-escape-${direction}.png`));
+}
 assert.equal(GoldenUiAssets.length, 14, 'four complete labels/images plus ten digits, no A-Z engine');
 GoldenUiAssets.forEach(asset => assert(textureRequests.some(request => request.asset === asset.key && request.url === asset.path)));
 assert.deepEqual(sheetRequests, [
@@ -479,6 +489,9 @@ let clearCount = 0, stopCount = 0, spawnCount = 0, inOverlap = false;
 let enemyClearCount = 0;
 let bananaClearCount = 0;
 scene.bananaBombs = { clear() { bananaClearCount++; }, update() {} };
+let allyClearCount = 0;
+const allyWaveStarts = [];
+scene.elonAlly = { clear() { allyClearCount++; }, startWave(wave) { allyWaveStarts.push(wave); }, update() {}, tryHit() { return false; } };
 let transitionBullets = [];
 scene.assetManager = {
     bullets: { get() {
@@ -551,6 +564,7 @@ assert.equal(scene.nextWaveReadyAt, 1600);
 assert.equal(clearCount, 0, 'player missiles must not be cleared');
 assert.equal(enemyClearCount, 1);
 assert.equal(bananaClearCount, 1, 'wave transition removes banana flights and blasts after overlaps');
+assert.equal(allyClearCount, 1, 'wave completion cancels pending/active allies');
 assert(flyingShot.active && trailingShot.active);
 assert.equal(flyingShot.y, 300);
 assert.equal(trailingShot.y, 480);
@@ -621,6 +635,7 @@ scene.physics.overlap = () => {};
 scene.update();
 assert.equal(scene.state, GameState.Playing);
 assert.equal(scene.wave, 2);
+assert.deepEqual(allyWaveStarts, [2], 'new-wave ally selection runs once at the actual wave start');
 assert.equal(score.waveLabel, 'WAVE 2');
 assert.equal(score.message, '', 'hide the centered announcement on spawn');
 assert.equal(scene.alienManager.lastWave, 2);
@@ -684,7 +699,10 @@ scene._fireBullet();
 scene.update();
 assert.equal(clearCount, before);
 const feedbackClearsBeforeRestart = feedbackClearCount;
+const allyClearsBeforeRestart = allyClearCount;
 scene.restart();
+assert.equal(allyClearCount, allyClearsBeforeRestart + 1);
+assert.equal(allyWaveStarts[allyWaveStarts.length - 1], 1, 'restart reinitializes ally state for Wave 1');
 assert.equal(feedbackClearCount, feedbackClearsBeforeRestart + 1, 'restart clears damage feedback before lives are rebuilt');
 assert.equal(scene.wave, 1);
 assert.equal(score.score, 0);
@@ -1545,6 +1563,370 @@ const ownedUiImages = uiImages.filter(image => image.active);
 uiShutdownListeners.slice().forEach(listener => listener.callback.call(listener.context));
 assert(ownedUiImages.every(image => image.destroyed), 'scene shutdown destroys all owned UI images');
 assert.equal(uiShutdownListeners.length, 0);
+
+// Elon uses original transparent PNGs and plain sprites, never Arcade bodies.
+assert.deepEqual([0, 0.399999, 0.40, 0.749999, 0.75, 0.999999].map(selectElonDescent), [2, 2, 3, 3, 4, 4]);
+const descentWeights = { 2: 0, 3: 0, 4: 0 };
+for (let sample = 0; sample < 10000; sample++) descentWeights[selectElonDescent((sample + 0.5) / 10000)]++;
+assert.deepEqual(descentWeights, { 2: 4000, 3: 3500, 4: 2500 }, 'exact 40/35/25 weighted intervals');
+const elonImages = new Map(['left', 'right', 'hit-left', 'hit-right', 'escape-left', 'escape-right'].map(direction => {
+    const filename = direction;
+    const png = decodePng(fs.readFileSync(path.resolve(__dirname, `../assets/meme-skins/elon-ally-${filename}.png`)));
+    assert.equal(png.width, 1536); assert.equal(png.height, 1024);
+    assert(png.pixels.some((value, index) => index % 4 === 3 && value === 0), 'ally PNG retains real transparency');
+    return [`elon-ally-${direction}`, { width: png.width, height: png.height, pixels: png.pixels }];
+}));
+const elonSprites = [];
+const elonScene = {
+    textures: { get: key => ({ getSourceImage: () => elonImages.get(key) }) },
+    physics: { world: { bounds: { left: 0, right: 800 } }, add: {
+        sprite() { assert.fail('ally must not get a physics body'); },
+        group() { assert.fail('ally must not enter an enemy or collision group'); }
+    } },
+    time: { now: 0, delayedCall() { assert.fail('no ally arrival timer'); }, addEvent() { assert.fail('no ally timers'); } },
+    add: { sprite(x, y, key) {
+        const image = elonImages.get(key);
+        const sprite = new Sprite(elonScene, x, y, key);
+        sprite.width = image.width; sprite.height = image.height;
+        delete sprite.body;
+        elonSprites.push(sprite); return sprite;
+    } }
+};
+let elonRolls = 0;
+let elonRandomValues = [0.299999, 0.499999, 0, 0.30];
+const elon = new ElonAlly(elonScene, () => { elonRolls++; assert(elonRandomValues.length); return elonRandomValues.shift(); },
+    ElonAppearancePresets.production);
+elon.startWave(1); elon.onDescent(1); elon.onDescent(2);
+elon.startWave(2); elon.onDescent(2); elon.update(1000000);
+assert.equal(elonRolls, 0); assert.equal(elonSprites.length, 0);
+elon.startWave(3); elon.startWave(3);
+assert.equal(elonRolls, 3, 'one eligibility, direction and target draw, no repeated wave-start roll');
+elon.onDescent(1); elon.update(1000000);
+assert.equal(elonSprites.length, 0, 'time alone never triggers an appearance');
+elon.onDescent(2);
+assert.equal(elonSprites.length, 1, 'selected wave spawns synchronously on second descent at time zero');
+const elonRight = elonSprites[0];
+assert.equal(elonRight.texture.key, 'elon-ally-right');
+assert.equal(elonRight.body, undefined);
+assert(elonRight.getBounds().right < 0, 'spawn fully outside the left edge');
+near(elonRight.width * elonRight.scaleX, 1536 * 84 * 1.30 / 1403);
+near(elonRight.height * elonRight.scaleY, 1024 * 84 * 1.30 / 1403);
+near(elonRight.scaleX, elonRight.scaleY);
+near(1403 * elonRight.scaleX, 84 * 1.30);
+near(678 * elonRight.scaleY, 678 * 84 * 1.30 / 1403);
+near(elonRight.y, 89.5);
+const idleDraw = actualPoseDraws.get('ship');
+const hudVisibleBottom = 49 + (idleDraw[6] + idleDraw[8] - 320 / 2) * 35 / 335;
+const pepeImage = decodePng(fs.readFileSync(path.resolve(__dirname, '../assets/meme-skins/pepe-invader.png')));
+const pepeVisible = visibleImageBounds(pepeImage.pixels, pepeImage.width, pepeImage.height);
+const invaderVisibleTop = 150 + (pepeVisible.y - 282 / 2) * MemeSkins.Invader.displayWidth / 337;
+assert(89.5 - 678 * elonRight.scaleY / 2 > hudVisibleBottom, 'enlarged ally clears visible HUD artwork');
+assert(89.5 + 678 * elonRight.scaleY / 2 < invaderVisibleTop,
+    'enlarged ally clears visible PEPE artwork after two descents');
+assert(elonRight.depth < UiDepth.Hud);
+const elonStartX = elonRight.x;
+elon.update(1000); near(elonRight.x - elonStartX, 280); near(elonRight.y, 89.5);
+elon.onDescent(2); elon.onDescent(3); elon.onDescent(4);
+assert.equal(elonSprites.length, 1); assert.equal(elonRolls, 3);
+elon.update(100000);
+assert(elonRight.destroyed); assert.equal(elon.sprite, undefined);
+elon.onDescent(5); assert.equal(elonSprites.length, 1, 'no second appearance after exiting');
+elon.startWave(4);
+assert.equal(elonRolls, 4, 'failed chance uses one draw and no direction/target draw');
+elon.onDescent(1); elon.onDescent(2); elon.update(100000);
+assert.equal(elonSprites.length, 1);
+for (const directionRoll of [0, 0.499999, 0.5, 0.999999]) {
+    elon.clear(); elonRandomValues = [0, directionRoll, 0]; elon.startWave(3);
+    elon.onDescent(2);
+    const sprite = elon.sprite;
+    near(sprite.scaleX, sprite.scaleY);
+    near(1403 * sprite.scaleX, 109.2);
+    near(sprite.y, 89.5);
+    assert.equal(sprite.texture.key, directionRoll < 0.5 ? 'elon-ally-right' : 'elon-ally-left');
+    if (directionRoll >= 0.5) {
+        assert(sprite.getBounds().left > 800, 'spawn fully outside the right edge');
+        const x = sprite.x;
+        elon.update(1000); near(sprite.x, x - 280);
+    }
+    elon.update(100000); assert(sprite.destroyed);
+}
+elon.clear(); elonRandomValues = [0, 0, 0, 0, 0, 0];
+elon.startWave(3); elon.onDescent(1); elon.clear(); elon.onDescent(2);
+assert.equal(elon.sprite, undefined, 'cancel pending appearance on wave completion/restart/shutdown');
+elon.startWave(4); elon.onDescent(1);
+assert.equal(elon.sprite, undefined, 'a new wave cannot inherit the previous descent count');
+elon.onDescent(2); const cancelledElon = elon.sprite;
+elon.clear(); elon.clear(); assert(cancelledElon.destroyed);
+
+// Integrate with actual formation edge steps, including multi-edge long frames.
+const descentAlly = new ElonAlly(elonScene, () => 0);
+const allyFormation = new AlienManager(formationScene);
+const descentEvents = [];
+allyFormation.onDescent = count => {
+    descentEvents.push(count);
+    descentAlly.onDescent(count);
+    assert.equal(!!descentAlly.sprite, count >= 2, 'ally appears in the exact second descent callback');
+};
+allyFormation.reset(3); descentAlly.startWave(3);
+const startTravel = 800 - Math.max(...allyFormation.aliens.getChildren().map(alien => alien.getBounds().right));
+const travelAcross = 800 - 527.36;
+allyFormation.update((startTravel + travelAcross * 2) / allyFormation.speed * 1000 + 1e-8, 10000);
+assert.deepEqual(descentEvents, [1, 2, 3], 'one event per formation step, not per invader');
+assert.equal(allyFormation.descentCount, 3);
+allyFormation.reset(4); assert.equal(allyFormation.descentCount, 0);
+descentAlly.clear(); descentAlly.startWave(4);
+const allyGameOver = new MainScene();
+allyGameOver.player = new Sprite(allyGameOver);
+allyGameOver.scoreManager = { setGameOverText() {} };
+allyGameOver.alienManager = allyFormation;
+allyGameOver.elonAlly = descentAlly;
+allyGameOver._gameOver();
+descentAlly.onDescent(2); assert.equal(descentAlly.sprite, undefined, 'GAME OVER cancels selected appearances');
+assert.equal(allyGameOver.state, GameState.GameOver);
+// A fatal second descent counts as movement, but must not spawn a doomed ally
+// before the scene applies its unchanged invasion GAME OVER handling.
+allyFormation.reset(3); descentAlly.startWave(3);
+const fatalDescentEvents = [];
+allyFormation.onDescent = count => { fatalDescentEvents.push(count); descentAlly.onDescent(count); };
+allyFormation.update(startTravel / allyFormation.speed * 1000 + 1e-8, 10000);
+assert.equal(allyFormation.descentCount, 1);
+const invasionLine = Math.max(...allyFormation.aliens.getChildren().map(alien => alien.body.bottom)) + 1;
+assert.equal(allyFormation.update(travelAcross / allyFormation.speed * 1000 + 1e-8, invasionLine), true);
+assert.equal(allyFormation.descentCount, 2);
+assert.deepEqual(fatalDescentEvents, [1]);
+allyGameOver._gameOver();
+descentAlly.onDescent(2); assert.equal(descentAlly.sprite, undefined);
+assert(elonSprites.every(sprite => sprite.destroyed), 'all ally sprites release on exit/cleanup');
+// Active temporary preset guarantees one appearance in every Wave 2+, while
+// the production-preset tests above retain the original exclusion/chance rules.
+assert.equal(ELON_VISUAL_TEST_OVERRIDE, true);
+assert.equal(ElonSettings.firstWave, 2); assert.equal(ElonSettings.appearanceChance, 1);
+assert.equal(ElonAppearancePresets.production.firstWave, 3);
+assert.equal(ElonAppearancePresets.production.appearanceChance, 0.30);
+assert.equal(ElonSettings.speed, 280);
+let testRolls = 0;
+const guaranteedElon = new ElonAlly(elonScene, () => { testRolls++; return 0.999999; });
+guaranteedElon.startWave(1); guaranteedElon.onDescent(1); guaranteedElon.onDescent(2);
+assert.equal(testRolls, 0); assert.equal(guaranteedElon.sprite, undefined);
+for (let wave = 2; wave <= 8; wave++) {
+    const oldRolls = testRolls;
+    guaranteedElon.startWave(wave); guaranteedElon.startWave(wave);
+    assert.equal(testRolls, oldRolls + 3, 'one appearance, direction and descent draw per test wave');
+    const before = elonSprites.length;
+    guaranteedElon.onDescent(1); guaranteedElon.update(1000000);
+    assert.equal(elonSprites.length, before, 'no timed or first-descent spawn');
+    guaranteedElon.onDescent(2); guaranteedElon.onDescent(3);
+    assert.equal(elonSprites.length, before, 'no appearance before selected descent 4');
+    guaranteedElon.onDescent(4);
+    assert.equal(elonSprites.length, before + 1, 'each eligible test wave spawns immediately on selected descent 4');
+    const selected = guaranteedElon.sprite;
+    assert.equal(selected.texture.key, 'elon-ally-left');
+    near(selected.width * selected.scaleX, 1536 * 109.2 / 1403);
+    guaranteedElon.onDescent(2); guaranteedElon.onDescent(3);
+    assert.equal(guaranteedElon.sprite, selected); assert.equal(elonSprites.length, before + 1);
+    guaranteedElon.update(100000);
+    assert(selected.destroyed); assert.equal(testRolls, oldRolls + 3);
+}
+guaranteedElon.startWave(9); guaranteedElon.onDescent(1); guaranteedElon.clear(); guaranteedElon.onDescent(2);
+assert.equal(guaranteedElon.sprite, undefined);
+guaranteedElon.startWave(1); assert.equal(guaranteedElon.sprite, undefined);
+assert(elonSprites.every(sprite => sprite.destroyed));
+
+// Each weighted target spawns synchronously from descent events, independently
+// of direction, and selection is made once even with repeated wave updates.
+let arrivalDraws = [], arrivalRolls = 0, arrivalWave = 1;
+const arrivalAlly = new ElonAlly(elonScene, () => { arrivalRolls++; assert(arrivalDraws.length); return arrivalDraws.shift(); });
+for (const directionRoll of [0.499999, 0.5]) {
+    for (const targetRoll of [0, 0.399999, 0.40, 0.749999, 0.75, 0.999999]) {
+        arrivalDraws = [0.999999, directionRoll, targetRoll];
+        const before = arrivalRolls;
+        arrivalAlly.startWave(++arrivalWave); arrivalAlly.startWave(arrivalWave);
+        assert.equal(arrivalRolls, before + 3); assert.equal(arrivalDraws.length, 0);
+        const target = selectElonDescent(targetRoll);
+        assert.equal(arrivalAlly.targetDescent, target);
+        for (let descent = 1; descent < target; descent++) {
+            arrivalAlly.onDescent(descent); arrivalAlly.update(100000);
+            assert.equal(arrivalAlly.sprite, undefined, 'time cannot spawn an ally before its selected descent');
+        }
+        arrivalAlly.onDescent(target);
+        const selected = arrivalAlly.sprite;
+        assert(selected, 'spawn inside the selected descent callback');
+        assert.equal(selected.texture.key, directionRoll < 0.5 ? 'elon-ally-right' : 'elon-ally-left');
+        for (const count of [target, target + 1, target + 2]) arrivalAlly.onDescent(count);
+        assert.equal(arrivalAlly.sprite, selected); assert.equal(arrivalRolls, before + 3);
+        arrivalAlly.clear(); assert(selected.destroyed); assert.equal(arrivalAlly.targetDescent, 0);
+    }
+}
+arrivalDraws = [0, 0, 0.99]; arrivalAlly.startWave(++arrivalWave);
+arrivalAlly.onDescent(2); arrivalAlly.onDescent(3); arrivalAlly.clear(); arrivalAlly.onDescent(4);
+assert.equal(arrivalAlly.sprite, undefined, 'early wave completion cancels the selected fourth descent');
+arrivalDraws = [0, 0, 0]; arrivalAlly.startWave(++arrivalWave); arrivalAlly.onDescent(2);
+assert(arrivalAlly.sprite, 'new wave selects afresh instead of retaining descent 4'); arrivalAlly.clear();
+
+// Both hit directions use the real PNG bounds; no physics/timer allocations.
+for (const directionRoll of [0, 0.999999]) {
+    let directionDraw = 0;
+    const hitAlly = new ElonAlly(elonScene, () => directionDraw++ % 3 === 1 ? directionRoll : 0);
+    elonScene.time.now = 100;
+    hitAlly.startWave(2); hitAlly.onDescent(2);
+    const sprite = hitAlly.sprite;
+    sprite.x = 400;
+    const shot = { enable: true, left: 397, right: 403, top: 71.5, bottom: 107.5 };
+    const originalShot = { ...shot };
+    assert.equal(hitAlly.state, ElonState.Flying);
+    assert.equal(hitAlly.tryHit({ ...shot, enable: false }), false);
+    assert.equal(hitAlly.tryHit({ ...shot, left: 460, right: 466 }), false, 'horizontal miss');
+    assert.equal(hitAlly.tryHit({ ...shot, top: 117, bottom: 130 }), false, 'transparent padding is not hittable');
+    const width = 1403 * sprite.scaleX, height = 678 * sprite.scaleY;
+    near(width, 109.2); near(height, 52.77091945830364);
+    assert.equal(hitAlly.tryHit(shot), true);
+    assert.deepEqual(shot, originalShot, 'collision never resizes or moves the projectile body');
+    assert.equal(hitAlly.state, ElonState.Hit);
+    const key = directionRoll < 0.5 ? 'elon-ally-hit-right' : 'elon-ally-hit-left';
+    assert.equal(sprite.texture.key, key);
+    const image = elonImages.get(key);
+    const art = visibleImageBounds(image.pixels, image.width, image.height);
+    const bounds = sprite.getBounds();
+    near(bounds.left + (art.x + art.width / 2) * sprite.scaleX, 400);
+    near(bounds.top + (art.y + art.height / 2) * sprite.scaleY, 89.5);
+    near(sprite.scaleX, sprite.scaleY);
+    near(art.height * sprite.scaleY, height);
+    assert(art.width * sprite.scaleX <= width, 'hit art stays within the original visible envelope');
+    assert.equal(sprite.tint, 0x5555ff);
+    for (const elapsed of [0, 49, 50, 99, 100, 149, 150, 199, 200, 249, 250, 999]) {
+        elonScene.time.now = 100 + elapsed;
+        assert.equal(hitAlly.tryHit(shot), false, 'additional hits cannot consume shots or extend the deadline');
+        hitAlly.update(5000);
+        near(sprite.x, 400); near(sprite.y, 89.5);
+        assert.equal(sprite.textureChanges, 1);
+        assert(!sprite.destroyed, 'hit frame lives until the 1000 ms deadline');
+        assert.equal(sprite.tint, elapsed < 250 && Math.floor(elapsed / 50) % 2 === 0 ? 0x5555ff : undefined);
+    }
+    const registration = ElonCarRegistration[key];
+    const carWidth = registration.width * sprite.scaleX;
+    const wheelX = sprite.x + (registration.x - sprite.displayOriginX) * sprite.scaleX;
+    const wheelY = sprite.y + (registration.y - sprite.displayOriginY) * sprite.scaleY;
+    elonScene.time.now = 1100; hitAlly.update(0);
+    assert.equal(hitAlly.state, ElonState.Escaping); assert(!sprite.destroyed);
+    const escapeKey = directionRoll < 0.5 ? 'elon-ally-escape-right' : 'elon-ally-escape-left';
+    assert.equal(sprite.texture.key, escapeKey); assert.equal(sprite.tint, undefined);
+    near(sprite.x, 400); near(sprite.y, 89.5);
+    const escape = ElonCarRegistration[escapeKey];
+    near(escape.width * sprite.scaleX, carWidth);
+    near(sprite.x + (escape.x - sprite.displayOriginX) * sprite.scaleX, wheelX);
+    near(sprite.y + (escape.y - sprite.displayOriginY) * sprite.scaleY, wheelY);
+    near(sprite.scaleX, sprite.scaleY);
+    // Continuous acceleration, in original direction, reaching 700 px/s.
+    let previousX = sprite.x, previousDistance = 0;
+    for (const elapsed of [50, 100, 150, 200, 250, 300, 350]) {
+        elonScene.time.now = 1100 + elapsed;
+        assert.equal(hitAlly.tryHit(shot), false, 'escape never consumes additional shots');
+        hitAlly.update(50);
+        const distance = (sprite.x - previousX) * (directionRoll < 0.5 ? 1 : -1);
+        assert(distance >= previousDistance - 1e-9, 'speed increases smoothly without reversing');
+        if (elapsed >= 300) near(distance, 700 * 0.05);
+        previousDistance = distance; previousX = sprite.x;
+        near(sprite.y, 89.5); assert.equal(sprite.textureChanges, 2);
+        hitAlly.update(5000); near(sprite.x, previousX, 'escape displacement follows elapsed time, not frame count');
+    }
+    elonScene.time.now = 10000; hitAlly.update(0);
+    assert(sprite.destroyed); assert.equal(hitAlly.state, ElonState.Removed);
+    assert.equal(hitAlly.sprite, undefined); assert.equal(hitAlly.tryHit(shot), false);
+    hitAlly.onDescent(2); assert.equal(hitAlly.sprite, undefined, 'removal does not grant a second appearance');
+    // Clearing a hit cancels its deadline; a later wave cannot inherit it.
+    hitAlly.startWave(3); hitAlly.onDescent(2); hitAlly.sprite.x = 400;
+    assert(hitAlly.tryHit(shot));
+    const cancelled = hitAlly.sprite;
+    hitAlly.clear(); hitAlly.clear(); assert(cancelled.destroyed);
+    hitAlly.startWave(4); hitAlly.onDescent(2);
+    elonScene.time.now += 1001; hitAlly.update(0);
+    assert.equal(hitAlly.state, ElonState.Flying); assert(!hitAlly.sprite.destroyed);
+    hitAlly.clear();
+}
+
+// Actual scene update consumes only a successful player shot, after overlaps.
+const hitScene = new MainScene();
+const sceneAlly = new ElonAlly(elonScene, () => 0);
+sceneAlly.startWave(2); sceneAlly.onDescent(2); sceneAlly.sprite.x = 400;
+const shots = [new Sprite(hitScene), new Sprite(hitScene), new Sprite(hitScene)];
+shots.forEach((shot, index) => { shot.body = { enable: true, left: index === 0 ? 600 : 397,
+    right: index === 0 ? 606 : 403, top: 71.5, bottom: 107.5 }; });
+const enemyShot = new Sprite(hitScene);
+let enemyIterations = 0;
+Object.assign(hitScene, {
+    state: GameState.Playing, wave: 2, time: elonScene.time,
+    starfield: { tilePositionY: 0 }, player: new Sprite(hitScene), firingTimer: Infinity,
+    elonAlly: sceneAlly, _shipKeyboardHandler() {},
+    alienManager: { update: () => false, aliens: { getChildren: () => [] }, stopMovement() {}, reset() {} },
+    assetManager: { bullets: { getChildren: () => shots }, enemyBullets: [enemyShot], reset() {} },
+    scoreManager: { increaseScore() { assert.fail('ally hits cannot score'); }, setGameOverText() {},
+        setHighScore() {}, resetLives() {}, setWave() {}, hideText() {} },
+    physics: { world: { bounds: { left: 0, right: 800, bottom: 600 } }, overlap(group) {
+        if (group === hitScene.assetManager.enemyBullets) {
+            enemyIterations++;
+            assert(!shots[1].destroyed, 'successful shot destruction is deferred until overlaps complete');
+            assert.equal(shots[1].active, false);
+        }
+    } }
+});
+hitScene.update(0, 0);
+assert(shots[0].active && !shots[0].destroyed, 'miss passes normally');
+assert(shots[1].destroyed, 'successful player shot consumed');
+assert(shots[2].active && !shots[2].destroyed, 'HIT ally ignores subsequent shots');
+assert(enemyShot.active && !enemyShot.destroyed); assert.equal(enemyIterations, 1);
+const gameOverHit = sceneAlly.sprite;
+hitScene._gameOver(); assert(gameOverHit.destroyed); assert.equal(sceneAlly.state, ElonState.Removed);
+sceneAlly.startWave(3); sceneAlly.onDescent(2); sceneAlly.sprite.x = 400;
+assert(sceneAlly.tryHit(shots[2].body)); const restartHit = sceneAlly.sprite;
+hitScene.restart(); assert(restartHit.destroyed); assert.equal(sceneAlly.sprite, undefined);
+assert.equal(sceneAlly.state, ElonState.Removed); assert.equal(hitScene.wave, 1);
+elonScene.time.now += 2000; sceneAlly.update(0); sceneAlly.onDescent(2);
+assert.equal(sceneAlly.sprite, undefined, 'no stale hit deadline or spawn after restart into Wave 1');
+// Last-invader cleanup also removes an in-progress hit reaction.
+hitScene.state = GameState.Playing;
+sceneAlly.startWave(2); sceneAlly.onDescent(2); sceneAlly.sprite.x = 400;
+assert(sceneAlly.tryHit(shots[2].body));
+const transitionHit = sceneAlly.sprite;
+hitScene.scoreManager.increaseScore = () => {};
+hitScene.scoreManager.setWaveText = () => {};
+hitScene.alienManager.hasAliveAliens = false;
+hitScene.assetManager.explosions = { get: () => ({}) };
+hitScene.assetManager.enemyBullets.clear = () => {};
+hitScene._bulletHitAliens(new Sprite(hitScene), { active: true, kill() {}, destroy() {} });
+assert.equal(hitScene.state, GameState.WaveTransition);
+const transitionCleanup = hitScene.pendingCleanup; hitScene.pendingCleanup = [];
+transitionCleanup.forEach(action => action());
+assert(transitionHit.destroyed); assert.equal(sceneAlly.state, ElonState.Removed);
+elonScene.time.now += 2000; sceneAlly.update(0);
+assert.equal(sceneAlly.sprite, undefined);
+
+// The shared lifecycle cleanup handles both stationary HIT and ESCAPING.
+for (const phase of [ElonState.Hit, ElonState.Escaping]) {
+    for (const action of ['gameOver', 'restart', 'wave', 'shutdown']) {
+        hitScene.state = GameState.Playing;
+        sceneAlly.startWave(2); sceneAlly.onDescent(2); sceneAlly.sprite.x = 400;
+        assert(sceneAlly.tryHit(shots[2].body));
+        const sprite = sceneAlly.sprite;
+        if (phase === ElonState.Escaping) {
+            elonScene.time.now += 1000; sceneAlly.update(0);
+        }
+        assert.equal(sceneAlly.state, phase);
+        if (action === 'gameOver') hitScene._gameOver();
+        else if (action === 'restart') hitScene.restart();
+        else if (action === 'shutdown') sceneAlly.clear(); // MainScene's existing shutdown hook.
+        else {
+            hitScene._bulletHitAliens(new Sprite(hitScene), { active: true, kill() {}, destroy() {} });
+            const pending = hitScene.pendingCleanup; hitScene.pendingCleanup = [];
+            pending.forEach(callback => callback());
+        }
+        assert(sprite.destroyed); assert.equal(sceneAlly.state, ElonState.Removed);
+        assert.equal(sceneAlly.targetDescent, 0);
+        elonScene.time.now += 2000; sceneAlly.update(100000); sceneAlly.onDescent(4);
+        assert.equal(sceneAlly.sprite, undefined, `${action} leaves no stale escape or pending arrival`);
+    }
+}
+assert(elonSprites.every(sprite => sprite.destroyed));
+console.log('PASS: directional ally hit textures/bounds, misses, single player-shot consumption, enemy exclusion, stationary HIT, 250ms blue pulses, exact 1000ms HIT, aligned accelerating escape, wave/GAME OVER/restart and stale-deadline cleanup.');
 console.log('PASS: banana selection, fixed arcs, explosion-only damage, radius/window, single hits, animation and lifecycle cleanup; existing wave, movement, skin, DOGE and PEPE regressions.');
 console.log('PASS: shared DOGE feedback, damage gates, PEPE impact removal, directional tint, pulse coalescing, HUD life accounting, GAME OVER and shutdown cleanup.');
 console.log('PASS: capped new-wave life recovery (1 to 2, 2 to 3, 3 to 3), immediate HUD, transition gates, no duplicates or revival, initial Wave 1 and restart.');
@@ -1552,3 +1934,5 @@ console.log('PASS: fixed HUD slots [1,2,3] -> [2,3] -> [3] -> [2,3] -> [1,2,3], 
 console.log('PASS: approved DOGE size/margins/edge limits unchanged; centered 6x4 alternating waves, exact 1.30x invader sizing and proportional bodies, no overlap, unchanged speeds/25px descent and canvas boundaries.');
 console.log('PASS: flying banana 36x24 -> 54x36 (+50%), unchanged launch/arc/rotation including edge landings, unchanged yellow explosion scale/radius/window and explosion-only damage.');
 console.log('PASS: golden HUD assets, digit reuse/cleanup/alignment, centered single-line multi-digit announcements, enlarged fixed life slots, single GAME OVER image, explicit overlay depths and restart/shutdown cleanup.');
+console.log('PASS: preserved production preset: Waves 1-2 exclusion, one 30% wave roll, 50/50 direction, weighted descent spawn with no timers, off-screen entry/exit, no physics and lifecycle cancellation.');
+console.log('PASS: temporary Wave 2+/100% appearance override, preserved ally scale/lane, unchanged 280px/s speed and weighted descent trigger; production preset preserved.');
