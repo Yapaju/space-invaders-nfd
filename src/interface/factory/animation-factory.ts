@@ -1,4 +1,5 @@
 import { AssetType } from "../assets";
+import { ElectricLaserSettings } from "../bullet";
 
 export enum AnimationType {
     Kaboom = "kaboom",
@@ -11,6 +12,14 @@ export class AnimationFactory {
     }
 
     private _init() {
+        if (!this._scene.anims.exists(ElectricLaserSettings.animation)) {
+            this._scene.anims.create({
+                key: ElectricLaserSettings.animation,
+                frames: this._scene.anims.generateFrameNumbers(AssetType.RapidLaser, { start: 0, end: 5 }),
+                frameRate: ElectricLaserSettings.frameRate,
+                repeat: -1
+            });
+        }
         this._scene.anims.create({
             key: AnimationType.Kaboom,
             frames: this._scene.anims.generateFrameNumbers(AssetType.Kaboom, {

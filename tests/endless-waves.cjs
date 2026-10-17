@@ -7,23 +7,27 @@ const ts = require('typescript');
 
 const testDocument = { createElement() {
     let image;
-    return { getContext: () => ({
+    const canvas = { getContext: () => ({
         drawImage(source) { image = source; },
-        getImageData: () => ({ data: image.pixels })
+        getImageData: () => ({ data: new Uint8ClampedArray(image.pixels) }),
+        putImageData(data) { canvas.pixels = data.data; }
     }) };
+    return canvas;
 } };
 
 class Sprite {
     constructor(scene, x = 0, y = 0, texture) {
-        const size = texture === 'alien' ? [337, 282] : texture === 'ship' ? [335, 320] : [32, 32];
+        const size = texture === 'alien' ? [337, 282] : texture === 'ship' ? [335, 320] : texture === 'bullet' ? [6, 36] : [32, 32];
         Object.assign(this, { scene, active: true, x, y, width: size[0], height: size[1],
             texture: { key: texture || 'ship' }, textureChanges: 0,
             originX: 0.5, originY: 0.5, scaleX: 1, scaleY: 1 });
+        this.anims = { stop: () => { this.animationKey = undefined; } };
         const sprite = this;
         this.body = {
             sourceWidth: size[0], sourceHeight: size[1], offsetX: 0, offsetY: 0,
             setSize(width, height) { this.sourceWidth = width; this.sourceHeight = height; },
             setOffset(x, y) { this.offsetX = x; this.offsetY = y; },
+            updateBounds() {},
             preUpdate() {},
             get top() { return sprite.y + sprite.scaleY * (this.offsetY - sprite.originY * sprite.height); },
             get bottom() { return this.top + this.sourceHeight * sprite.scaleY; },
@@ -49,7 +53,12 @@ class Sprite {
     setDepth(value) { this.depth = value; return this; }
     setCollideWorldBounds(value) { this.body.setCollideWorldBounds(value); return this; }
     on(event, callback) { this.listeners = this.listeners || {}; this.listeners[event] = callback; return this; }
-    setTexture(key) { this.texture.key = key; this.textureChanges++; return this; }
+    setTexture(key) {
+        this.texture.key = key; this.textureChanges++;
+        if (key === 'bullet') { this.width = 6; this.height = 36; }
+        if (key === 'rapid-electric-laser') { this.width = 64; this.height = 128; }
+        return this;
+    }
     setOrigin(x, y = x) { this.originX = x; this.originY = y; return this; }
     setDisplaySize(width, height) { this.scaleX = width / this.width; this.scaleY = height / this.height; return this; }
     preUpdate() {}
@@ -96,7 +105,9 @@ const { GameState } = load('src/interface/game-state.ts');
 const { ScoreManager, MAX_LIVES } = load('src/interface/manager/score-manager.ts');
 const { AlienManager } = load('src/interface/manager/alien-manager.ts');
 const { AssetManager } = load('src/interface/manager/asset-manager.ts');
-const { Bullet } = load('src/interface/bullet.ts');
+const { Bullet, ElectricLaserSettings } = load('src/interface/bullet.ts');
+const { RapidFire, RapidFireSettings } = load('src/interface/rapid-fire.ts');
+const { BuffIndicator, BuffIndicatorSettings } = load('src/interface/buff-indicator.ts');
 const { EnemyBullet } = load('src/interface/enemy-bullet.ts');
 const { Alien } = load('src/interface/alien.ts');
 const { MemeSkins, PlayerPoses, PlayerCanvas, visibleImageBounds, preparePlayerPoses, applySkin, applySkinAppearance } = load('src/interface/skins.ts');
@@ -108,7 +119,7 @@ const { BananaBombs, BananaSettings, bananaTrajectory } = load('src/interface/ba
 const { Kaboom } = load('src/interface/kaboom.ts');
 const { AnimationFactory } = load('src/interface/factory/animation-factory.ts');
 const { DamageFeedback, DamageFeedbackSettings } = load('src/interface/damage-feedback.ts');
-const { GoldenNumber, GoldenUiAssets, UiDepth, UiTexture } = load('src/interface/golden-number.ts');
+const { GoldenNumber, GoldenUiAssets, UiDepth, UiTexture, digitTexture, recolorDigitPixels } = load('src/interface/golden-number.ts');
 const { ElonAlly, ElonState, ElonSettings, ElonAppearancePresets, ELON_VISUAL_TEST_OVERRIDE, selectElonDescent, ElonCarRegistration } = load('src/interface/elon-ally.ts');
 const uiDimensions = new Map(GoldenUiAssets.map(asset => {
     const png = fs.readFileSync(path.resolve(__dirname, '../assets', asset.path));
@@ -146,21 +157,28 @@ for (const direction of ['left', 'right']) {
 assert.equal(GoldenUiAssets.length, 14, 'four complete labels/images plus ten digits, no A-Z engine');
 GoldenUiAssets.forEach(asset => assert(textureRequests.some(request => request.asset === asset.key && request.url === asset.path)));
 assert.deepEqual(sheetRequests, [
+    { asset: 'rapid-electric-laser', url: 'weapons/rapid-laser/rapid-laser-spritesheet.png', config: { frameWidth: 64, frameHeight: 128 } },
     { asset: 'kaboom', url: 'images/explode.png', config: { frameWidth: 128, frameHeight: 128 } },
     { asset: 'ponke-explosion', url: 'meme-skins/ponke-explosion.png', config: { frameWidth: 128, frameHeight: 128 } }
 ]);
 const animationConfigs = [];
-new AnimationFactory({ anims: {
+const animationScene = { anims: {
+    exists: key => animationConfigs.some(config => config.key === key),
     create(config) { animationConfigs.push(config); },
     generateFrameNumbers(texture, range) { return { texture, start: range.start, end: range.end }; }
-} });
-assert.equal(animationConfigs.length, 2);
+} };
+new AnimationFactory(animationScene);
+assert.equal(animationConfigs.length, 3);
+assert.deepEqual(animationConfigs[0], { key: 'rapid-electric-laser',
+    frames: { texture: 'rapid-electric-laser', start: 0, end: 5 }, frameRate: 14, repeat: -1 });
 for (const [index, key] of ['kaboom', 'ponke-explosion'].entries()) {
-    assert.deepEqual(animationConfigs[index], {
+    assert.deepEqual(animationConfigs[index + 1], {
         key, frames: { texture: key, start: 0, end: 15 },
         frameRate: 24, repeat: 0, hideOnComplete: true
     });
 }
+new AnimationFactory(animationScene);
+assert.equal(animationConfigs.filter(config => config.key === ElectricLaserSettings.animation).length, 1, 'shared electric animation registered once');
 for (const skin of Object.values(MemeSkins)) {
     const asset = skin === MemeSkins.Player ? `${skin.asset}-source` : skin.asset;
     assert(textureRequests.some(request => request.asset === asset && request.url === skin.path));
@@ -1926,6 +1944,355 @@ for (const phase of [ElonState.Hit, ElonState.Escaping]) {
     }
 }
 assert(elonSprites.every(sprite => sprite.destroyed));
+// Verify the supplied horizontal RGBA sheet against all six original frames.
+const electricSheet = decodePng(fs.readFileSync(path.resolve(__dirname, '../assets/weapons/rapid-laser/rapid-laser-spritesheet.png')));
+assert.equal(electricSheet.width, 384); assert.equal(electricSheet.height, 128);
+for (let frame = 0; frame < 6; frame++) {
+    const png = decodePng(fs.readFileSync(path.resolve(__dirname, '../assets/weapons/rapid-laser/rapid-laser-0' + (frame + 1) + '.png')));
+    assert.equal(png.width, 64); assert.equal(png.height, 128);
+    assert(png.pixels.some((value, index) => index % 4 === 3 && value === 0));
+    assert(png.pixels.some((value, index) => index % 4 === 3 && value > 0));
+    for (let y = 0; y < 128; y++) for (let x = 0; x < 64; x++) {
+        const i = (y * 64 + x) * 4, j = (y * 384 + frame * 64 + x) * 4;
+        assert.equal(electricSheet.pixels[j + 3], png.pixels[i + 3]);
+        if (png.pixels[i + 3]) for (let channel = 0; channel < 3; channel++) {
+            assert.equal(electricSheet.pixels[j + channel], png.pixels[i + channel], 'visible sheet pixels match individual assets');
+        }
+    }
+}
+
+// Use Phaser's actual Clock/TimerEvent to verify expiration, pause and timeScale.
+for (const originY of [0.5, 1]) {
+    const projectileScene = { sound: { play() {} }, physics: { world: {
+        bounds: { left: 0, right: 800, top: 0, bottom: 600 }
+    } } };
+    const projectile = new Bullet(projectileScene).setOrigin(0.5, originY);
+    projectile.angle = 0;
+    projectile.body = new ArcadeBody({ defaults: {}, bounds: {} }, projectile);
+    projectile.setVelocityY = value => { projectile.body.velocity.y = value; return projectile; };
+    const worldShape = () => [projectile.body.left, projectile.body.top, projectile.body.width,
+        projectile.body.height, projectile.body.velocity.y, projectile.x, projectile.y, projectile.originX, projectile.originY];
+    projectile.shoot(400, 300); projectile.body.preUpdate(false, 0);
+    const blueShape = worldShape();
+    for (let reuse = 0; reuse < 3; reuse++) {
+        projectile.shoot(400, 300, true); projectile.body.preUpdate(false, 0);
+        blueShape.forEach((value, index) => near(worldShape()[index], value));
+        near(projectile.width * projectile.scaleX, 20); near(projectile.height * projectile.scaleY, 40);
+        for (let frame = 0; frame < 6; frame++) {
+            // All frames share source dimensions; frame switches must leave
+            // the explicitly sized physics rectangle and velocity untouched.
+            projectile.setTexture('rapid-electric-laser'); projectile.body.preUpdate(false, 0);
+            blueShape.forEach((value, index) => near(worldShape()[index], value));
+        }
+        projectile.shoot(400, 300); projectile.body.preUpdate(false, 0);
+        blueShape.forEach((value, index) => near(worldShape()[index], value));
+        assert.equal(projectile.animationKey, undefined); near(projectile.scaleX, 1);
+        near(projectile.body.offset.x, 0); near(projectile.body.offset.y, 0);
+    }
+    projectile.shoot(400, 300, true); projectile.y = -37; projectile.update();
+    assert(projectile.destroyed, 'electric artwork padding does not delay natural projectile clearing');
+}
+
+// Derived NFD digit palettes keep the exact source shapes, alpha and dimensions.
+const fontSources = new Map(Array.from({ length: 10 }, (_, digit) => {
+    const png = decodePng(fs.readFileSync(path.resolve(__dirname, `../assets/font/nfd-font-${digit}.png`)));
+    return [`nfd-font-${digit}`, png];
+}));
+const coloredFonts = new Map();
+const fontTextures = {
+    exists: key => fontSources.has(key) || coloredFonts.has(key),
+    get: key => ({ getSourceImage: () => fontSources.get(key) || coloredFonts.get(key) || elonImages.get(key) }),
+    addCanvas(key, canvas) {
+        assert(!coloredFonts.has(key), 'each digit/color texture is generated once');
+        coloredFonts.set(key, canvas); uiDimensions.set(key, [canvas.width, canvas.height]);
+    }
+};
+const fontScene = { textures: fontTextures };
+for (let digit = 0; digit < 10; digit++) {
+    const source = fontSources.get(`nfd-font-${digit}`), original = Buffer.from(source.pixels);
+    assert.equal(digitTexture(fontScene, String(digit)), `nfd-font-${digit}`, 'default HUD uses original gold');
+    const key = digitTexture(fontScene, String(digit), 0xff3030);
+    assert.equal(key, `nfd-font-${digit}-color-ff3030`);
+    assert.equal(digitTexture(fontScene, String(digit), 0xff3030), key);
+    const red = coloredFonts.get(key);
+    assert.equal(red.width, source.width); assert.equal(red.height, source.height);
+    let vividPixels = 0;
+    for (let i = 0; i < source.pixels.length; i += 4) {
+        assert.equal(red.pixels[i + 3], source.pixels[i + 3], 'exact original alpha on every frame pixel');
+        if (source.pixels[i + 3]) {
+            const high = Math.max(source.pixels[i], source.pixels[i + 1], source.pixels[i + 2]);
+            assert.equal(red.pixels[i], high, 'preserve original shading/highlight intensity');
+            assert.equal(red.pixels[i + 1], red.pixels[i + 2], 'electric red hue, no yellow/gold cast');
+            assert(red.pixels[i] >= red.pixels[i + 1]);
+            if (red.pixels[i] > 230 && red.pixels[i + 1] < 120) vividPixels++;
+        }
+    }
+    assert(vividPixels > 0, 'each digit contains vivid red');
+    assert(original.equals(Buffer.from(source.pixels)), 'source gold pixels remain unchanged');
+}
+assert.equal(coloredFonts.size, 10);
+const greenSample = new Uint8ClampedArray([255, 190, 0, 128, 255, 255, 255, 255, 0, 0, 0, 0]);
+recolorDigitPixels(greenSample, 0x30ff30);
+assert.deepEqual(Array.from(greenSample), [48, 255, 48, 128, 255, 255, 255, 255, 0, 0, 0, 0], 'future buff palettes retain alpha and white highlights');
+
+const Clock = require('phaser/src/time/Clock');
+const EventEmitter = require('eventemitter3');
+const bonusScene = new MainScene();
+const bonusGraphics = [], bonusDigits = [], bonusShots = [];
+bonusScene.events = new EventEmitter();
+bonusScene.game = { canvas: { width: 800, height: 600 }, loop: { time: 1000 } };
+bonusScene.sys = { events: bonusScene.events, game: bonusScene.game };
+bonusScene.time = new Clock(bonusScene);
+bonusScene.events.emit('boot'); bonusScene.events.emit('start');
+bonusScene.add = {
+    image(x, y, key) {
+        const sprite = uiImage(bonusScene, x, y, key);
+        const setTexture = sprite.setTexture.bind(sprite);
+        sprite.setTexture = key => { setTexture(key); [sprite.width, sprite.height] = uiDimensions.get(key); return sprite; };
+        bonusDigits.push(sprite); return sprite;
+    },
+    sprite: (x, y, key) => elonScene.add.sprite(x, y, key),
+    graphics() {
+        const graphic = {
+            ellipses: [],
+            setPosition(x, y) { this.x = x; this.y = y; return this; },
+            setDepth(depth) { this.depth = depth; return this; },
+            clear() { return this; }, fillStyle() { return this; }, fillCircle(x, y, radius) { this.radius = radius; return this; },
+            lineStyle(width, color, alpha) { this.stroke = width; this.color = color; this.alpha = alpha; return this; },
+            strokeCircle() { return this; }, beginPath() { return this; },
+            strokeEllipse(x, y, width, height) { this.ellipses.push({ width, height, stroke: this.stroke, color: this.color, alpha: this.alpha }); return this; },
+            arc(x, y, radius, start, end, anticlockwise) { Object.assign(this, { start, end, anticlockwise }); return this; },
+            strokePath() { return this; }, destroy() { this.destroyed = true; }
+        };
+        bonusGraphics.push(graphic); bonusScene.children.add(graphic); return graphic;
+    }
+};
+bonusScene.sound = { play() {} };
+bonusScene.state = GameState.Playing; bonusScene.wave = 2;
+bonusScene.player = new Sprite(bonusScene, 400, 500);
+applySkinAppearance(bonusScene.player, MemeSkins.Player);
+bonusScene.player.setDepth(0);
+const List = require('phaser/src/structs/List');
+bonusScene.children = new List();
+const auraBackground = { depth: 0 };
+bonusScene.children.add(auraBackground); bonusScene.children.add(bonusScene.player);
+bonusScene.starfield = { tilePositionY: 0 }; bonusScene.firingTimer = Infinity;
+bonusScene._shipKeyboardHandler = () => {};
+bonusScene.physics = { world: { bounds: { left: 0, right: 800, top: 0, bottom: 600 } }, overlap() {} };
+bonusScene.textures = fontTextures;
+bonusScene.alienManager = { update: () => false, aliens: { getChildren: () => [] },
+    stopMovement() {}, reset() {}, hasAliveAliens: false };
+bonusScene.scoreManager = { increaseScore() { assert.fail('bonus activation must not score'); },
+    setGameOverText() {}, setHighScore() {}, resetLives() {}, setWave() {}, hideText() {},
+    setWaveText() {}, recoverOneLife() {}, noMoreLives: false };
+bonusScene.assetManager = {
+    bullets: { get() {
+        const shot = new Bullet(bonusScene);
+        shot.width = shot.body.sourceWidth = 6; shot.height = shot.body.sourceHeight = 36;
+        shot.body.enable = true;
+        Object.defineProperties(shot.body, {
+            left: { get: () => shot.x - 3 }, right: { get: () => shot.x + 3 }
+        });
+        bonusShots.push(shot); return shot;
+    }, getChildren: () => bonusShots, countActive: () => 0 },
+    enemyBullets: { clear() {} }, explosions: { get: () => ({}) },
+    reset() { bonusShots.forEach(shot => shot.destroy()); }
+};
+const intervalChanges = [];
+bonusScene.rapidFire = new RapidFire(bonusScene, (previous, current) => {
+    intervalChanges.push([previous, current]); bonusScene.bulletTime += current - previous;
+}, () => bonusScene.playerShootingEnabled);
+const rapid = bonusScene.rapidFire;
+const tickBonus = delta => {
+    bonusScene.events.emit('preupdate');
+    bonusScene.events.emit('update', bonusScene.time.now + delta, delta);
+    rapid.update();
+    bonusScene.events.emit('postupdate');
+};
+assert.equal(RapidFireSettings.duration, 10000); assert.equal(RapidFireSettings.fireRateMultiplier, 1.5);
+assert.equal(rapid.active, false); assert.equal(rapid.firingInterval, 200); assert.equal(bonusGraphics.length, 0);
+bonusScene._fireBullet();
+const normalShot = bonusShots[0]; assert.equal(normalShot.texture.key, 'bullet');
+assert.equal(normalShot.velocityY, -400); near(bonusScene.bulletTime, 1200);
+const unaffectedShot = bonusScene.assetManager.bullets.get(); unaffectedShot.shoot(600, 300);
+bonusScene.elonAlly = new ElonAlly(bonusScene, () => 0);
+bonusScene.elonAlly.startWave(2); bonusScene.elonAlly.onDescent(2); bonusScene.elonAlly.sprite.x = 400;
+normalShot.setPosition(400, 89.5);
+bonusScene.update(0, 0);
+assert(normalShot.destroyed); assert(rapid.active, 'activation occurs on the successful hit before HIT animation completes');
+assert.equal(bonusScene.elonAlly.state, ElonState.Hit); assert.equal(rapid.timer.getElapsed(), 0);
+assert.equal(intervalChanges.length, 1); near(rapid.firingInterval, 200 / 1.5); near(bonusScene.bulletTime, 1000 + 200 / 1.5);
+assert.equal(unaffectedShot.texture.key, 'bullet', 'existing blue shots remain blue');
+assert.equal(bonusGraphics.filter(g => !g.destroyed).length, 1);
+const circle = rapid.indicator.graphics;
+assert.equal(rapid.aura, undefined, 'DOGE aura removed');
+assert.equal(bonusScene.player.tint, undefined);
+near(circle.x, 400); near(circle.y, 64); near(circle.radius * 2 + circle.stroke, 51);
+assert(circle.y - circle.radius - circle.stroke / 2 > 32, 'gap below unchanged WAVE HUD');
+assert(circle.y + circle.radius + circle.stroke / 2 < 100, 'clear of starting invader frames');
+assert(circle.depth >= UiDepth.Hud && circle.depth < UiDepth.Overlay);
+near(circle.start, -Math.PI / 2); near(circle.end - circle.start, 2 * Math.PI);
+assert.equal(circle.anticlockwise, false);
+assert.equal(circle.color, 0xff3030, 'electric-red ring from activation');
+const countdown = rapid.indicator.number;
+const assertCountdown = value => {
+    assert.equal(countdown.text, String(value));
+    assert.equal(circle.color, 0xff3030, 'ring stays electric red throughout the bonus');
+    const digits = countdown.digits;
+    near((digits[0].getBounds().left + digits[digits.length - 1].getBounds().right) / 2, 400);
+    assert(digits.every(digit => /^nfd-font-\d-color-ff3030$/.test(digit.texture.key) && digit.depth > UiDepth.Hud));
+};
+assertCountdown(10);
+const geometry = [unaffectedShot.width, unaffectedShot.height, unaffectedShot.scaleX, unaffectedShot.scaleY,
+    unaffectedShot.originX, unaffectedShot.originY, unaffectedShot.body.sourceWidth, unaffectedShot.body.sourceHeight];
+tickBonus(134); bonusScene._fireBullet();
+const redShot = bonusShots[bonusShots.length - 1]; assert.equal(redShot.texture.key, 'rapid-electric-laser');
+near(bonusScene.bulletTime, bonusScene.time.now + 200 / 1.5);
+near(redShot.width * redShot.scaleX, 20); near(redShot.height * redShot.scaleY, 40);
+near(redShot.body.sourceWidth * redShot.scaleX, 6); near(redShot.body.sourceHeight * redShot.scaleY, 36);
+assert.equal(redShot.animationKey, ElectricLaserSettings.animation);
+near(redShot.originX, unaffectedShot.originX); near(redShot.originY, unaffectedShot.originY);
+assert.equal(redShot.velocityY, -400);
+const shotCount = bonusShots.length; tickBonus(133); bonusScene._fireBullet(); assert.equal(bonusShots.length, shotCount);
+tickBonus(1); bonusScene._fireBullet(); assert.equal(bonusShots.length, shotCount + 1);
+const untilRemaining = remaining => tickBonus(rapid.timer.delay - rapid.timer.getElapsed() - remaining);
+untilRemaining(9600); assertCountdown(10);
+const disabledRemaining = rapid.timer.delay - rapid.timer.getElapsed();
+const disabledEnd = circle.end, disabledShots = bonusShots.length;
+bonusScene.player.setActive(false);
+tickBonus(1234); bonusScene._fireBullet();
+near(rapid.timer.delay - rapid.timer.getElapsed(), disabledRemaining);
+near(circle.end, disabledEnd); assertCountdown(10); assert.equal(bonusShots.length, disabledShots);
+bonusScene.player.setActive(true);
+const pausedEnd = circle.end;
+bonusScene.time.paused = true; tickBonus(5000);
+assertCountdown(10); near(circle.end, pausedEnd, 'Phaser Clock pause freezes the buff');
+bonusScene.time.paused = false; bonusScene.time.timeScale = 0.5;
+tickBonus(2000); near(rapid.timer.delay - rapid.timer.getElapsed(), 8600);
+bonusScene.time.timeScale = 1;
+untilRemaining(8200); assertCountdown(9); near(circle.end - circle.start, 2 * Math.PI * 0.82);
+untilRemaining(3000); assertCountdown(3); assert.equal(circle.color, RapidFireSettings.ringColor);
+untilRemaining(2999); assertCountdown(3); assert.equal(circle.color, RapidFireSettings.ringColor);
+untilRemaining(2100); assertCountdown(3);
+untilRemaining(200); assertCountdown(1);
+const expiringTimer = rapid.timer;
+untilRemaining(0);
+assert.equal(rapid.active, false); assert.equal(rapid.firingInterval, 200);
+assert(circle.destroyed); assert.equal(rapid.indicator.number, undefined, 'no lingering zero');
+assert.equal(rapid.aura, undefined);
+assert.equal(expiringTimer.callback, undefined);
+assert.equal(redShot.texture.key, 'rapid-electric-laser', 'existing red shots retain their color at expiration');
+assert.equal(unaffectedShot.texture.key, 'bullet');
+bonusScene._fireBullet(); assert.equal(bonusShots[bonusShots.length - 1].texture.key, 'bullet');
+near(bonusScene.bulletTime, bonusScene.time.now + 200);
+// The same projectile object also resets to blue when reused.
+redShot.shoot(400, 500); assert.equal(redShot.texture.key, 'bullet');
+
+rapid.activate(); tickBonus(9000);
+const oldTimer = rapid.timer, oldIndicator = rapid.indicator.graphics;
+const deadlineBeforeRefresh = bonusScene.bulletTime, changesBeforeRefresh = intervalChanges.length;
+rapid.activate();
+assert.equal(oldTimer.callback, undefined, 'refresh releases the old timer callback');
+assert.equal(rapid.timer.delay - rapid.timer.getElapsed(), 10000);
+assert.equal(rapid.indicator.number.text, '10');
+assert.equal(rapid.indicator.graphics, oldIndicator, 'refresh reuses a single HUD indicator');
+assert.equal(rapid.aura, undefined, 'refresh does not create an aura');
+assert.equal(intervalChanges.length, changesBeforeRefresh); near(bonusScene.bulletTime, deadlineBeforeRefresh);
+near(rapid.firingInterval, 200 / 1.5);
+tickBonus(200); assert.equal(rapid.indicator.number.text, '10');
+tickBonus(801); assert(rapid.active, 'old expiration cannot cancel refreshed boost');
+assert.equal(bonusGraphics.filter(g => !g.destroyed).length, 1);
+
+const boostDamageFeedback = new DamageFeedback(bonusScene, bonusScene.player);
+boostDamageFeedback.show(new Sprite(bonusScene));
+assert.equal(bonusScene.player.tint, DamageFeedbackSettings.tint);
+rapid.update(); assert.equal(bonusScene.player.tint, DamageFeedbackSettings.tint, 'rapid fire does not overwrite red damage flashes');
+assert.equal(rapid.aura, undefined);
+tickBonus(50); assert.equal(bonusScene.player.tint, undefined, 'damage flash still alternates normally');
+tickBonus(200); assert.equal(bonusScene.player.tint, undefined);
+boostDamageFeedback.destroy();
+
+// Actual wave completion freezes the same timer before Clock's next update,
+// even if a lingering shot prolongs the announcement far beyond its delay.
+const transitionTimer = rapid.timer;
+const transitionElapsed = transitionTimer.getElapsed();
+const transitionEnd = rapid.indicator.graphics.end, transitionNumber = rapid.indicator.number.text;
+let bonusTrailingShots = 1;
+bonusScene.assetManager.bullets.countActive = () => bonusTrailingShots;
+bonusScene.scoreManager.increaseScore = () => {};
+bonusScene._bulletHitAliens(new Sprite(bonusScene), { active: true, kill() {}, destroy() {} });
+assert.equal(bonusScene.state, GameState.WaveTransition);
+const bonusCleanup = bonusScene.pendingCleanup; bonusScene.pendingCleanup = [];
+bonusCleanup.forEach(callback => callback());
+assert.equal(rapid.timer, transitionTimer);
+tickBonus(1000); bonusScene.update(0, 0);
+assert.equal(bonusScene.state, GameState.WaveTransition); assert(rapid.active);
+near(transitionTimer.getElapsed(), transitionElapsed);
+near(rapid.indicator.graphics.end, transitionEnd); assert.equal(rapid.indicator.number.text, transitionNumber);
+tickBonus(15000); bonusScene.update(0, 0);
+assert.equal(bonusScene.state, GameState.WaveTransition); assert(rapid.active);
+near(transitionTimer.getElapsed(), transitionElapsed);
+near(rapid.indicator.graphics.end, transitionEnd); assert.equal(rapid.indicator.number.text, transitionNumber);
+bonusTrailingShots = 0; bonusScene._startNextWave();
+assert.equal(bonusScene.state, GameState.Playing); assert.equal(bonusScene.wave, 3);
+assert.equal(rapid.timer, transitionTimer); assert(rapid.active);
+tickBonus(37); near(transitionTimer.getElapsed(), transitionElapsed + 37);
+assert(rapid.indicator.graphics.end < transitionEnd, 'ring resumes from its frozen progress');
+untilRemaining(1); assert(rapid.active); assert.equal(rapid.indicator.number.text, '1');
+tickBonus(1); assert(!rapid.active, 'expires after exactly 10000 ms of usable gameplay, excluding announcement');
+assert.equal(rapid.aura, undefined);
+
+// Repeated GAME OVER/restarts release HUD/timer state and start with blue shots.
+for (let restart = 0; restart < 4; restart++) {
+    if (!rapid.active) rapid.activate();
+    const timer = rapid.timer;
+    if (restart % 2 === 1) {
+        bonusScene.state = GameState.WaveTransition; tickBonus(0);
+        assert(timer.paused, 'also cancel bonuses paused for an announcement');
+    }
+    bonusScene._gameOver();
+    assert(!rapid.active); assert.equal(rapid.firingInterval, 200); assert.equal(timer.callback, undefined);
+    assert(bonusGraphics.every(graphic => graphic.destroyed));
+    bonusScene.restart();
+    assert(!rapid.active); assert.equal(bonusScene.wave, 1); assert.equal(rapid.indicator.graphics, undefined);
+    tickBonus(1); bonusScene._fireBullet();
+    const shot = bonusShots[bonusShots.length - 1];
+    assert.equal(shot.texture.key, 'bullet'); near(bonusScene.bulletTime, bonusScene.time.now + 200);
+    assert(bonusDigits.every(digit => digit.destroyed));
+    tickBonus(0); assert.equal(bonusScene.time._active.length, 0, 'paused canceled timers retire instead of lingering');
+}
+rapid.activate();
+const shutdownTimer = rapid.timer;
+bonusScene.events.emit('shutdown');
+assert(!rapid.active); assert.equal(shutdownTimer.callback, undefined);
+assert(bonusGraphics.every(graphic => graphic.destroyed)); assert(bonusDigits.every(digit => digit.destroyed));
+assert.equal(bonusScene.events.listenerCount('shutdown'), 0);
+assert.equal(bonusScene.time._active.length, 0); assert.equal(bonusScene.time._pendingInsertion.length, 0);
+assert.equal(bonusScene.events.listenerCount('preupdate'), 0); assert.equal(bonusScene.events.listenerCount('postupdate'), 0);
+// Static logo content uses the same small component, without creating a buff.
+const staticCircle = new BuffIndicator(bonusScene, { x: 450, y: 64, logo: 'nfd-font-1' });
+staticCircle.show(); near(staticCircle.graphics.end - staticCircle.graphics.start, 2 * Math.PI);
+assert.equal(staticCircle.number, undefined); near(staticCircle.logo.x, 450);
+assert.equal(staticCircle.graphics.color, BuffIndicatorSettings.ring, 'default indicator palette unchanged');
+staticCircle.clear(); staticCircle.clear();
+const numberLayout = { x: 400, y: 64, height: 20, align: 'center', maxWidth: 36, depth: UiDepth.Hud };
+const goldenReference = new GoldenNumber(bonusScene, numberLayout);
+const redReference = new GoldenNumber(bonusScene, { ...numberLayout, digitColor: 0xff3030 });
+for (const text of ['10', '9', '8', '3', '1']) {
+    goldenReference.setText(text); redReference.setText(text);
+    near(goldenReference.width, redReference.width); near(goldenReference.height, redReference.height);
+    goldenReference.digits.forEach((gold, index) => {
+        const red = redReference.digits[index];
+        assert.equal(gold.texture.key, `nfd-font-${text[index]}`, 'other HUD digits stay golden');
+        assert.equal(red.texture.key, `${gold.texture.key}-color-ff3030`);
+        assert.deepEqual(red.getBounds(), gold.getBounds(), 'palette does not change placement or spacing');
+    });
+}
+goldenReference.destroy(); redReference.destroy();
+assert.equal(coloredFonts.size, 10, 'refreshes and countdown changes reuse the same palette cache');
+assert(bonusGraphics.every(graphic => graphic.destroyed)); assert(bonusDigits.every(digit => digit.destroyed));
+console.log('PASS: electric-red buff ring at all durations, red NFD digit palettes with identical alpha/shapes/layout, original golden HUD preserved, per-buff colors, unchanged wave pause/resume and expiration.');
+console.log('PASS: immediate Elon rapid fire (200ms / 1.5), exact 10s usable-gameplay timer, frozen announcement ring/digits, pause/timeScale, refresh, six-frame 14fps electric lasers with unchanged 6x36 bodies, no DOGE aura or runtime glow, preserved damage flash, expiration/restart/shutdown cleanup.');
 console.log('PASS: directional ally hit textures/bounds, misses, single player-shot consumption, enemy exclusion, stationary HIT, 250ms blue pulses, exact 1000ms HIT, aligned accelerating escape, wave/GAME OVER/restart and stale-deadline cleanup.');
 console.log('PASS: banana selection, fixed arcs, explosion-only damage, radius/window, single hits, animation and lifecycle cleanup; existing wave, movement, skin, DOGE and PEPE regressions.');
 console.log('PASS: shared DOGE feedback, damage gates, PEPE impact removal, directional tint, pulse coalescing, HUD life accounting, GAME OVER and shutdown cleanup.');

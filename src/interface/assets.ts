@@ -1,5 +1,6 @@
 export enum AssetType {
     Bullet = "bullet",
+    RapidLaser = "rapid-electric-laser",
     EnemyBullet = "enemyBullet",
     Banana = "ponke-banana",
     ElonRight = "elon-ally-right",

@@ -17,6 +17,38 @@ interface NumberOptions {
     gap?: number;
     label?: string;
     labelGap?: number;
+    digitColor?: number;
+}
+
+// Remap chroma to the selected palette while preserving shadows, neutral
+// highlights and every alpha value. Unlike tint multiplication, no gold remains.
+export function recolorDigitPixels(pixels: Uint8ClampedArray, color: number) {
+    const channels = [(color >> 16) & 255, (color >> 8) & 255, color & 255];
+    for (let i = 0; i < pixels.length; i += 4) {
+        if (!pixels[i + 3]) continue;
+        const low = Math.min(pixels[i], pixels[i + 1], pixels[i + 2]);
+        const chroma = (Math.max(pixels[i], pixels[i + 1], pixels[i + 2]) - low) / 255;
+        for (let channel = 0; channel < 3; channel++) pixels[i + channel] = low + channels[channel] * chroma;
+    }
+}
+
+export function digitTexture(scene: Phaser.Scene, digit: string, color?: number): string {
+    const source = `nfd-font-${digit}`;
+    if (color === undefined) return source;
+    const key = `${source}-color-${color.toString(16).padStart(6, '0')}`;
+    if (!scene.textures.exists(key)) {
+        const image = scene.textures.get(source).getSourceImage() as HTMLImageElement;
+        const canvas = document.createElement('canvas');
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0);
+        const data = context.getImageData(0, 0, image.width, image.height);
+        recolorDigitPixels(data.data, color);
+        context.putImageData(data, 0, 0);
+        scene.textures.addCanvas(key, canvas);
+    }
+    return key;
 }
 
 // One row of aspect-preserving images. All digit PNGs share a height/baseline.
@@ -43,8 +75,9 @@ export class GoldenNumber {
         this.text = value;
         while (this.digits.length > value.length) this.digits.pop().destroy();
         Array.from(value).forEach((digit, index) => {
-            if (!this.digits[index]) this.digits.push(this.image(`nfd-font-${digit}`));
-            else this.digits[index].setTexture(`nfd-font-${digit}`);
+            const key = digitTexture(this.scene, digit, this.options.digitColor);
+            if (!this.digits[index]) this.digits.push(this.image(key));
+            else this.digits[index].setTexture(key);
         });
         this.layout();
         return this;

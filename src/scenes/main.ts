@@ -1,5 +1,5 @@
 import { AssetType, SoundType } from "../interface/assets";
-import { Bullet } from "../interface/bullet";
+import { Bullet, ElectricLaserSettings } from "../interface/bullet";
 import { AssetManager } from "../interface/manager/asset-manager";
 import { AlienManager } from "../interface/manager/alien-manager";
 import { Ship } from "../interface/ship";
@@ -16,6 +16,7 @@ import { BananaBombs } from "../interface/banana-bomb";
 import { DamageFeedback } from "../interface/damage-feedback";
 import { GoldenUiAssets } from "../interface/golden-number";
 import { ElonAlly } from "../interface/elon-ally";
+import { RapidFire, RapidFireSettings } from "../interface/rapid-fire";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -30,6 +31,7 @@ export class MainScene extends Phaser.Scene {
     private bananaBombs: BananaBombs;
     private damageFeedback: DamageFeedback;
     private elonAlly: ElonAlly;
+    private rapidFire: RapidFire;
     starfield: Phaser.GameObjects.TileSprite;
     player: Phaser.Physics.Arcade.Sprite;
     alienManager: AlienManager;
@@ -46,6 +48,9 @@ export class MainScene extends Phaser.Scene {
         this.load.setBaseURL("assets/");
         this.load.image(AssetType.Starfield, "images/starfield.png");
         this.load.image(AssetType.Bullet, "images/bullet.png");
+        this.load.spritesheet(AssetType.RapidLaser, "weapons/rapid-laser/rapid-laser-spritesheet.png", {
+            frameWidth: ElectricLaserSettings.frameWidth, frameHeight: ElectricLaserSettings.frameHeight
+        });
         this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
         this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
         this.load.image(AssetType.ElonRight, "meme-skins/elon-ally-right.png");
@@ -94,6 +99,11 @@ export class MainScene extends Phaser.Scene {
         this.player = Ship.create(this);
         this.alienManager = new AlienManager(this);
         this.scoreManager = new ScoreManager(this);
+        this.rapidFire = new RapidFire(this, (previous, current) => {
+            // Recalculate the pending shot from its original fire time so a
+            // rate change takes effect immediately, without stacking refreshes.
+            this.bulletTime += current - previous;
+        }, () => this.playerShootingEnabled);
         this.damageFeedback = new DamageFeedback(this, this.player);
         this.bananaBombs = new BananaBombs(this, this.assetManager.explosions, () => this._damagePlayer());
         this.elonAlly = new ElonAlly(this);
@@ -121,6 +131,7 @@ export class MainScene extends Phaser.Scene {
             this.player.setVelocity(0, 0);
             return;
         }
+        if (this.rapidFire) this.rapidFire.update();
         if (this.state === GameState.WaveTransition) {
             this._startNextWave();
         }
@@ -152,6 +163,7 @@ export class MainScene extends Phaser.Scene {
         if (this.state === GameState.Playing && this.elonAlly) {
             this.assetManager.bullets.getChildren().forEach((bullet: Bullet) => {
                 if (bullet.active && this.elonAlly.tryHit(bullet.body as Phaser.Physics.Arcade.Body)) {
+                    if (this.rapidFire) this.rapidFire.activate();
                     bullet.disableBody(true, true);
                     this.pendingCleanup.push(() => bullet.destroy());
                 }
@@ -245,6 +257,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _gameOver() {
+        if (this.rapidFire) this.rapidFire.clear();
         this.state = GameState.GameOver;
         this.scoreManager.setGameOverText();
         this.player.setVelocity(0, 0);
@@ -275,16 +288,20 @@ export class MainScene extends Phaser.Scene {
         }
     }
 
+    private get playerShootingEnabled() {
+        return this.state === GameState.Playing && this.player.active;
+    }
+
     private _fireBullet() {
-        if (this.state !== GameState.Playing || !this.player.active) {
+        if (!this.playerShootingEnabled) {
             return;
         }
 
         if (this.time.now > this.bulletTime) {
             let bullet: Bullet = this.assetManager.bullets.get();
             if (bullet) {
-                bullet.shoot(this.player.x, this.player.y - Ship.bulletOffset);
-                this.bulletTime = this.time.now + 200;
+                bullet.shoot(this.player.x, this.player.y - Ship.bulletOffset, !!this.rapidFire && this.rapidFire.active);
+                this.bulletTime = this.time.now + (this.rapidFire ? this.rapidFire.firingInterval : RapidFireSettings.normalFiringInterval);
             }
         }
     }
@@ -309,6 +326,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     restart() {
+        if (this.rapidFire) this.rapidFire.clear();
         if (this.elonAlly) this.elonAlly.clear();
         if (this.damageFeedback) this.damageFeedback.clear();
         if (this.bananaBombs) this.bananaBombs.clear();
