@@ -14,6 +14,7 @@ import { PonkePoses, prepareEnemySkins } from "../interface/enemy-skins";
 import { EnemyType } from "../interface/enemy-type";
 import { BananaBombs } from "../interface/banana-bomb";
 import { DamageFeedback } from "../interface/damage-feedback";
+import { GoldenUiAssets } from "../interface/golden-number";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -45,6 +46,7 @@ export class MainScene extends Phaser.Scene {
         this.load.image(AssetType.Bullet, "images/bullet.png");
         this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
         this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
+        GoldenUiAssets.forEach(asset => this.load.image(asset.key, asset.path));
         Object.keys(MemeSkins).forEach(key => {
             const skin = MemeSkins[key] as SkinDefinition;
             if (skin.asset !== MemeSkins.Player.asset) {

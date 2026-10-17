@@ -46,6 +46,7 @@ class Sprite {
     setVisible(value) { this.visible = value; return this; }
     setActive(value) { this.active = value; return this; }
     setAlpha(value) { this.alpha = value; return this; }
+    setDepth(value) { this.depth = value; return this; }
     setCollideWorldBounds(value) { this.body.setCollideWorldBounds(value); return this; }
     on(event, callback) { this.listeners = this.listeners || {}; this.listeners[event] = callback; return this; }
     setTexture(key) { this.texture.key = key; this.textureChanges++; return this; }
@@ -106,6 +107,19 @@ const { BananaBombs, BananaSettings, bananaTrajectory } = load('src/interface/ba
 const { Kaboom } = load('src/interface/kaboom.ts');
 const { AnimationFactory } = load('src/interface/factory/animation-factory.ts');
 const { DamageFeedback, DamageFeedbackSettings } = load('src/interface/damage-feedback.ts');
+const { GoldenNumber, GoldenUiAssets, UiDepth, UiTexture } = load('src/interface/golden-number.ts');
+const uiDimensions = new Map(GoldenUiAssets.map(asset => {
+    const png = fs.readFileSync(path.resolve(__dirname, '../assets', asset.path));
+    return [asset.key, [png.readUInt32BE(16), png.readUInt32BE(20)]];
+}));
+const uiImages = [];
+function uiImage(scene, x, y, key) {
+    assert(uiDimensions.has(key), `missing UI texture ${key}`);
+    const sprite = new Sprite(scene, x, y, key);
+    [sprite.width, sprite.height] = uiDimensions.get(key);
+    uiImages.push(sprite);
+    return sprite;
+}
 
 // Skin textures are standalone PNGs, with collision boxes inside their artwork.
 const textureRequests = [];
@@ -119,6 +133,8 @@ preloadScene.load = {
     audio() {}
 };
 preloadScene.preload();
+assert.equal(GoldenUiAssets.length, 14, 'four complete labels/images plus ten digits, no A-Z engine');
+GoldenUiAssets.forEach(asset => assert(textureRequests.some(request => request.asset === asset.key && request.url === asset.path)));
 assert.deepEqual(sheetRequests, [
     { asset: 'kaboom', url: 'images/explode.png', config: { frameWidth: 128, frameHeight: 128 } },
     { asset: 'ponke-explosion', url: 'meme-skins/ponke-explosion.png', config: { frameWidth: 128, frameHeight: 128 } }
@@ -436,8 +452,16 @@ scene.time = {
 const score = Object.create(ScoreManager.prototype);
 Object.assign(score, {
     score: 0, highScore: 0, remaining: 3,
-    scoreText: { setText() {} }, waveText: { setText(text) { score.waveLabel = text; } },
-    line1Text: { setText(text) { score.message = text; } }, line2Text: { setText() {} },
+    scoreText: { setText() {} }, waveText: { setText(text) { score.waveLabel = `WAVE ${text}`; } },
+    waveAnnouncement: {
+        setText(text) { score.message = `WAVE ${text}`; return this; },
+        setVisible(visible) { if (!visible && score.message.startsWith('WAVE')) score.message = ''; return this; }
+    },
+    gameOverImage: { setVisible(visible) {
+        if (visible) score.message = 'GAME OVER';
+        else if (score.message === 'GAME OVER') score.message = '';
+        return this;
+    } },
     lives: {
         countActive: () => score.remaining,
         getFirstAlive: () => ({
@@ -1235,7 +1259,7 @@ feedbackScene.add = { graphics() {
 } };
 feedbackScene.player = new Sprite(feedbackScene, 400, 500, 'ship');
 feedbackScene.player.depth = 0;
-const feedbackLives = [0, 1, 2].map(i => new Sprite(feedbackScene, 700 + i * 30, 60, 'ship'));
+const feedbackLives = [0, 1, 2].map(i => new Sprite(feedbackScene, 700 + i * 30, 60, 'ship').setAlpha(1));
 feedbackScene.scoreManager = {
     lives: { getFirstAlive: () => feedbackLives.find(life => life.active) },
     get noMoreLives() { return !feedbackLives.some(life => life.active); },
@@ -1265,6 +1289,7 @@ const pepeShot = new EnemyBullet(feedbackScene);
 feedbackScene._enemyBulletHitPlayer(feedbackScene.player, pepeShot);
 assert(!feedbackLives[0].active && feedbackLives[0].visible);
 assert.equal(feedbackLives[0].tint, DamageFeedbackSettings.tint);
+assert.equal(feedbackLives[0].alpha, 1, 'life-loss flash preserves full icon opacity');
 assert.equal(feedbackScene.player.tint, DamageFeedbackSettings.tint);
 assert.equal(rings.length, 1); assert.equal(rings[0].radius, 14);
 assert.deepEqual([rings[0].x, rings[0].y], [400, 500]);
@@ -1321,7 +1346,13 @@ feedback.destroy();
 // Use the real lives initialization/reset/recovery code and transition method.
 const recoveryScene = new MainScene();
 recoveryScene.game = { canvas: { width: 800, height: 600 } };
-recoveryScene.add = { text: () => ({ setText() { return this; }, setOrigin() { return this; } }) };
+recoveryScene.add = { image: (x, y, key) => uiImage(recoveryScene, x, y, key) };
+let uiShutdownListeners = [];
+recoveryScene.events = {
+    once(event, callback, context) { uiShutdownListeners.push({ event, callback, context }); },
+    off(event, callback, context) { uiShutdownListeners = uiShutdownListeners.filter(item =>
+        item.event !== event || item.callback !== callback || item.context !== context); }
+};
 let lifeIcons = [], livesGroupConfig;
 recoveryScene.physics = { world: { bounds: { left: 0, right: 800, top: 0, bottom: 600 } }, add: { group(config) {
     livesGroupConfig = config;
@@ -1343,7 +1374,7 @@ recoveryScene.scoreManager.recoverOneLife = function() { recoveryCalls++; return
 const lifeCount = () => recoveryScene.scoreManager.lives.countActive(true);
 assert.equal(MAX_LIVES, 3); assert.equal(livesGroupConfig.maxSize, MAX_LIVES);
 assert.equal(lifeCount(), 3); assert.equal(recoveryCalls, 0, 'initial Wave 1 does not grant recovery');
-assert(lifeIcons.every(icon => icon.visible !== false && icon.alpha === 0.6));
+assert(lifeIcons.every(icon => icon.visible !== false && icon.alpha === 1 && icon.tint === undefined));
 recoveryScene.time = { now: 0 };
 recoveryScene.player = new Sprite(recoveryScene, 400, 500, 'ship');
 let activeRecoveryShots = 0, recoveryWaveSpawns = 0;
@@ -1390,7 +1421,7 @@ for (const [beforeRecovery, afterRecovery] of [[1, 2], [2, 3], [3, 3]]) {
     assert.equal(lifeCount(), afterRecovery);
     assert.equal(lifeIcons.filter(icon => icon.visible).length, afterRecovery, 'HUD reflects recovery immediately');
     assertConsecutiveLives(afterRecovery);
-    assert(lifeIcons.filter(icon => icon.active).every(icon => icon.tint === undefined && icon.alpha === 0.6));
+    assert(lifeIcons.filter(icon => icon.active).every(icon => icon.tint === undefined && icon.alpha === 1));
     for (let i = 0; i < 100; i++) recoveryScene._startNextWave();
     assert.equal(lifeCount(), afterRecovery, 'no duplicate recovery within a single transition');
     assert.equal(recoveryCalls, callsBefore + 1);
@@ -1420,9 +1451,104 @@ assert(lifeIcons.every(icon => icon.active && icon.visible !== false && icon.tin
 assertConsecutiveLives(3);
 recoveryScene._startNextWave();
 assert.equal(lifeCount(), 3); assert.equal(recoveryCalls, callsBeforeRecoveryRestart);
+// Golden UI layout, value updates and lifecycle use the real PNG dimensions.
+const uiManager = recoveryScene.scoreManager;
+assert.equal(uiManager.scoreText.text, '0000');
+assert.equal(uiManager.waveText.text, '1');
+lifeIcons.forEach((icon, index) => {
+    near(icon.width * icon.scaleX, 35);
+    near(icon.x, 686.5 + 38 * index); near(icon.y, 49);
+    assert.equal(icon.depth, UiDepth.Hud);
+    assert.equal(icon.alpha, 1); assert.equal(icon.tint, undefined);
+});
+assert(lifeIcons[0].getBounds().right < lifeIcons[1].getBounds().left);
+assert(lifeIcons[1].getBounds().right < lifeIcons[2].getBounds().left);
+near(lifeIcons[2].getBounds().right, 780);
+lifeIcons[0].setActive(false).setVisible(false).setAlpha(0.2).setTint(0x123456);
+uiManager.recoverOneLife();
+assert(lifeIcons[0].active && lifeIcons[0].visible);
+assert.equal(lifeIcons[0].alpha, 1); assert.equal(lifeIcons[0].tint, undefined);
+uiManager.increaseScore(12345);
+assert.equal(uiManager.scoreText.text, '12345');
+const sameLengthImages = uiManager.scoreText.digits.slice();
+uiManager.increaseScore(1);
+assert(uiManager.scoreText.digits.every((image, index) => image === sameLengthImages[index]));
+uiManager.setHighScore();
+assert.equal(uiManager.scoreText.text, '0000');
+assert(sameLengthImages[4].destroyed, 'shrinking numeric values destroys surplus sprites');
+for (const wave of [1, 12, 100, 999999, 1000000000000]) {
+    uiManager.setWave(wave);
+    assert.equal(uiManager.waveText.text, String(wave));
+    uiManager.setWaveText(wave);
+    const previousAnnouncement = new GoldenNumber(recoveryScene, {
+        x: 400, y: 300, height: 96, align: 'center', maxWidth: 720,
+        gap: 4, labelGap: 20, depth: UiDepth.Overlay, label: UiTexture.Wave
+    }).setText(String(wave));
+    near(uiManager.waveAnnouncement.width, previousAnnouncement.width * 0.85);
+    near(uiManager.waveAnnouncement.height, previousAnnouncement.height * 0.85);
+    const oldGap = previousAnnouncement.digits[0].getBounds().left - previousAnnouncement.label.getBounds().right;
+    const newGap = uiManager.waveAnnouncement.digits[0].getBounds().left - uiManager.waveAnnouncement.label.getBounds().right;
+    near(newGap, oldGap * 0.85);
+    previousAnnouncement.destroy();
+    const images = [uiManager.waveAnnouncement.label, ...uiManager.waveAnnouncement.digits];
+    const left = images[0].getBounds().left, right = images[images.length - 1].getBounds().right;
+    near((left + right) / 2, 400);
+    assert(left >= 94 - 1e-7 && right <= 706 + 1e-7);
+    const tops = images.map(image => image.getBounds().top);
+    const bottoms = images.map(image => image.getBounds().bottom);
+    tops.forEach(top => near(top, tops[0]));
+    bottoms.forEach(bottom => near(bottom, bottoms[0]));
+    near((tops[0] + bottoms[0]) / 2, 300);
+    assert(images.every(image => image.visible && image.depth === UiDepth.Overlay));
+    assert.equal(uiManager.gameOverImage.visible, false);
+}
+uiManager.setWaveText(12);
+uiManager.setWave(12);
+near(uiManager.waveAnnouncement.height, 96 * 0.85);
+near(uiManager.waveText.height, 22);
+uiManager.setGameOverText();
+assert.equal(uiManager.gameOverImage.texture.key, UiTexture.GameOver);
+assert.equal(uiManager.gameOverImage.visible, true);
+assert.equal(uiImages.filter(image => image.active && image.texture.key === UiTexture.GameOver).length, 1);
+assert(uiManager.waveAnnouncement.digits.every(image => !image.visible));
+near(uiManager.gameOverImage.x, 400); near(uiManager.gameOverImage.y, 300);
+near(uiManager.gameOverImage.scaleX, uiManager.gameOverImage.scaleY);
+near(uiManager.gameOverImage.width * uiManager.gameOverImage.scaleX, 760 * 0.70);
+near(uiManager.gameOverImage.height * uiManager.gameOverImage.scaleY, 760 * 749 / 2098 * 0.70);
+assert(uiManager.gameOverImage.getBounds().left >= 0 && uiManager.gameOverImage.getBounds().right <= 800);
+assert.equal(uiManager.gameOverImage.depth, UiDepth.Overlay);
+assert(UiDepth.Overlay > UiDepth.Hud && UiDepth.Hud > 1, 'explicit UI depth beats gameplay creation order and impact rings');
+uiManager.hideText();
+assert(!uiManager.gameOverImage.visible && !uiManager.waveAnnouncement.label.visible);
+const imageCountBeforeRestarts = () => uiImages.filter(image => image.active).length;
+uiManager.setWaveText(1); uiManager.hideText(); uiManager.setWave(1);
+const stableImageCount = imageCountBeforeRestarts();
+for (let i = 0; i < 25; i++) {
+    uiManager.increaseScore(10); uiManager.setWaveText(1); uiManager.setGameOverText();
+    recoveryScene.restart();
+    assert.equal(uiManager.scoreText.text, '0000'); assert.equal(uiManager.waveText.text, '1');
+    assert(!uiManager.gameOverImage.visible && !uiManager.waveAnnouncement.label.visible);
+    assert.equal(imageCountBeforeRestarts(), stableImageCount, 'restart reuses UI objects without leaks');
+}
+for (const align of ['left', 'center', 'right']) {
+    const number = new GoldenNumber(recoveryScene, { x: 400, y: 300, height: 24,
+        maxWidth: 160, depth: UiDepth.Hud, align });
+    number.setText('1234567890');
+    const left = number.digits[0].getBounds().left;
+    const right = number.digits[number.digits.length - 1].getBounds().right;
+    near(right - left, 160);
+    near(align === 'left' ? left : align === 'right' ? right : (left + right) / 2, 400);
+    assert(number.digits.every(image => image.height * image.scaleY <= 24));
+    number.destroy(); number.destroy();
+}
+const ownedUiImages = uiImages.filter(image => image.active);
+uiShutdownListeners.slice().forEach(listener => listener.callback.call(listener.context));
+assert(ownedUiImages.every(image => image.destroyed), 'scene shutdown destroys all owned UI images');
+assert.equal(uiShutdownListeners.length, 0);
 console.log('PASS: banana selection, fixed arcs, explosion-only damage, radius/window, single hits, animation and lifecycle cleanup; existing wave, movement, skin, DOGE and PEPE regressions.');
 console.log('PASS: shared DOGE feedback, damage gates, PEPE impact removal, directional tint, pulse coalescing, HUD life accounting, GAME OVER and shutdown cleanup.');
 console.log('PASS: capped new-wave life recovery (1 to 2, 2 to 3, 3 to 3), immediate HUD, transition gates, no duplicates or revival, initial Wave 1 and restart.');
 console.log('PASS: fixed HUD slots [1,2,3] -> [2,3] -> [3] -> [2,3] -> [1,2,3], zero lives and restart; lost leftmost icon retains damage flash.');
 console.log('PASS: approved DOGE size/margins/edge limits unchanged; centered 6x4 alternating waves, exact 1.30x invader sizing and proportional bodies, no overlap, unchanged speeds/25px descent and canvas boundaries.');
 console.log('PASS: flying banana 36x24 -> 54x36 (+50%), unchanged launch/arc/rotation including edge landings, unchanged yellow explosion scale/radius/window and explosion-only damage.');
+console.log('PASS: golden HUD assets, digit reuse/cleanup/alignment, centered single-line multi-digit announcements, enlarged fixed life slots, single GAME OVER image, explicit overlay depths and restart/shutdown cleanup.');
