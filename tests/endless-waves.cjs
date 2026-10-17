@@ -46,6 +46,7 @@ class Sprite {
     setVisible(value) { this.visible = value; return this; }
     setActive(value) { this.active = value; return this; }
     setAlpha(value) { this.alpha = value; return this; }
+    setCollideWorldBounds(value) { this.body.setCollideWorldBounds(value); return this; }
     on(event, callback) { this.listeners = this.listeners || {}; this.listeners[event] = callback; return this; }
     setTexture(key) { this.texture.key = key; this.textureChanges++; return this; }
     setOrigin(x, y = x) { this.originX = x; this.originY = y; return this; }
@@ -99,7 +100,7 @@ const { Alien } = load('src/interface/alien.ts');
 const { MemeSkins, PlayerPoses, PlayerCanvas, visibleImageBounds, preparePlayerPoses, applySkin, applySkinAppearance } = load('src/interface/skins.ts');
 const { Ship } = load('src/interface/ship.ts');
 const { EnemyType } = load('src/interface/enemy-type.ts');
-const { getWaveConfiguration } = load('src/interface/wave-config.ts');
+const { getWaveConfiguration, FORMATION_COLUMNS, FORMATION_ROWS, INVADERS_PER_WAVE } = load('src/interface/wave-config.ts');
 const { PonkePoses, prepareEnemySkins } = load('src/interface/enemy-skins.ts');
 const { BananaBombs, BananaSettings, bananaTrajectory } = load('src/interface/banana-bomb.ts');
 const { Kaboom } = load('src/interface/kaboom.ts');
@@ -254,12 +255,13 @@ for (const pose of PonkePoses) {
 }
 for (const wave of [1, 2, 3, 4, 5, 6, 7, 8, 99, 100, 999, 1000]) {
     const config = getWaveConfiguration(wave);
-    assert.equal(config.enemies.length, 40);
+    assert.equal(config.enemies.length, 24);
     assert(config.enemies.every(type => type === (wave % 2 ? EnemyType.Ponke : EnemyType.Pepe)));
 }
 
 // Use the installed Phaser Body to verify scaled offsets and no post-update drift.
 const ArcadeBody = require('phaser/src/physics/arcade/Body');
+Phaser.Geom = { Rectangle: require('phaser/src/geom/rectangle/Rectangle') };
 for (const skin of Object.values(MemeSkins)) {
     const sprite = new Sprite({}, 400, 500, skin.asset);
     sprite.angle = 0;
@@ -275,6 +277,70 @@ for (const skin of Object.values(MemeSkins)) {
         sprite.body.postUpdate();
         nearSkin(sprite.x, 400 + i); nearSkin(sprite.y, 500 + i);
     }
+}
+
+// Exercise Ship.create with the real Arcade body, including artwork-aware edge
+// limits. Original collision proportions scale uniformly with the artwork.
+const playerWorld = {
+    defaults: {}, bounds: new Phaser.Geom.Rectangle(0, 0, 800, 600),
+    checkCollision: { left: true, right: true, up: true, down: true }
+};
+const playerScene = { physics: { world: playerWorld, add: { sprite(x, y, key) {
+    const sprite = new Sprite(playerScene, x, y, key);
+    sprite.angle = 0;
+    sprite.body = new ArcadeBody(playerWorld, sprite);
+    return sprite;
+} } } };
+const enlargedPlayer = Ship.create(playerScene);
+const spawn = Ship.startPosition(playerScene);
+nearSkin(enlargedPlayer.width * enlargedPlayer.scaleX, 52 * 1.4);
+nearSkin(enlargedPlayer.height * enlargedPlayer.scaleY, 320 * 52 * 1.4 / 335);
+nearSkin(enlargedPlayer.body.width, 180 * enlargedPlayer.scaleX);
+nearSkin(enlargedPlayer.body.height, 195 * enlargedPlayer.scaleY);
+nearSkin(enlargedPlayer.x, 400); nearSkin(enlargedPlayer.y, spawn.y);
+nearSkin(enlargedPlayer.getBounds().bottom, 588);
+const { decodePng } = require('../scripts/recolor-ponke-explosion.cjs');
+const actualPoseImages = new Map(PlayerPoses.map(pose => {
+    const png = decodePng(fs.readFileSync(path.resolve(__dirname, '../assets', pose.path)));
+    return [`${pose.asset}-source`, { width: png.width, height: png.height, pixels: png.pixels }];
+}));
+const actualPoseDraws = new Map();
+preparePlayerPoses({ textures: {
+    exists: key => actualPoseImages.has(key),
+    get: key => ({ getSourceImage: () => actualPoseImages.get(key) }),
+    createCanvas(key) { return {
+        context: { drawImage(...args) { actualPoseDraws.set(key, args); } }, refresh() {}
+    }; }
+} });
+const projectedArt = draw => {
+    const [x, y, width, height] = draw.slice(5);
+    const left = enlargedPlayer.x + (x - enlargedPlayer.displayOriginX) * enlargedPlayer.scaleX;
+    const top = enlargedPlayer.y + (y - enlargedPlayer.displayOriginY) * enlargedPlayer.scaleY;
+    return { left, top, right: left + width * enlargedPlayer.scaleX,
+        bottom: top + height * enlargedPlayer.scaleY };
+};
+for (const draw of actualPoseDraws.values()) {
+    const art = projectedArt(draw);
+    const margin = 600 - art.bottom;
+    assert(margin >= 20 && margin <= 25, `visible DOGE bottom margin ${margin}`);
+    assert(art.top >= 0 && art.bottom <= 600);
+}
+for (const outsideX of [-100, 900]) {
+    enlargedPlayer.body.reset(outsideX, spawn.y);
+    enlargedPlayer.body.preUpdate(false, 0);
+    enlargedPlayer.body.checkWorldBounds();
+    enlargedPlayer.body.postUpdate();
+    for (const draw of actualPoseDraws.values()) {
+        const art = projectedArt(draw);
+        assert(art.left >= -1e-7 && art.right <= 800 + 1e-7, 'every DOGE pose remains fully visible at both canvas edges');
+    }
+}
+enlargedPlayer.body.reset(spawn.x, spawn.y);
+enlargedPlayer.body.preUpdate(false, 0);
+const enlargedState = [enlargedPlayer.scaleX, enlargedPlayer.scaleY, enlargedPlayer.body.width, enlargedPlayer.body.height];
+for (const [direction, now] of [[-1, 0], [1, 1], [1, 34], [-1, 35], [0, 36]]) {
+    Ship.setDirection(enlargedPlayer, direction, now);
+    assert.deepEqual([enlargedPlayer.scaleX, enlargedPlayer.scaleY, enlargedPlayer.body.width, enlargedPlayer.body.height], enlargedState);
 }
 
 // Texture switches leave real Phaser collision geometry, position and velocity alone.
@@ -317,7 +383,7 @@ for (const [left, right, key, velocity] of [
     inputScene._shipKeyboardHandler();
     assert.equal(directionalPlayer.texture.key, key);
     assert.equal(directionalPlayer.body.velocity.x, velocity);
-    assert.deepEqual(shotOrigin, [400, 482], 'poses must not move the projectile origin');
+    assert.deepEqual(shotOrigin, [400, 500 - Ship.bulletOffset], 'poses must not move the projectile origin');
     assert.equal(directionalPlayer.x, 400); assert.equal(directionalPlayer.y, 500);
 }
 
@@ -329,7 +395,7 @@ function drive(now, left, right, key) {
     assert.equal(directionalPlayer.texture.key, key);
     assert.equal(directionalPlayer.body.velocity.x, left ? -200 : right ? 200 : 0);
     assert.equal(directionalPlayer.x, 400); assert.equal(directionalPlayer.y, 500);
-    assert.deepEqual(shotOrigin, [400, 482]);
+    assert.deepEqual(shotOrigin, [400, 500 - Ship.bulletOffset]);
 }
 drive(2000, false, false, 'ship');
 drive(2010, true, false, 'ship-left');
@@ -403,7 +469,7 @@ scene.assetManager = {
     gameOver() { assert(!inOverlap); clearCount++; transitionBullets = []; },
     reset() { assert(!inOverlap); clearCount++; transitionBullets = []; }
 };
-let alive = 40;
+let alive = INVADERS_PER_WAVE;
 let movementUpdates = 0;
 scene.alienManager = {
     aliens: { getChildren: () => [] },
@@ -415,7 +481,7 @@ scene.alienManager = {
         if (wave > 1) {
             assert.equal(scene.assetManager.bullets.countActive(true), 0, 'all active shots must finish before spawning');
         }
-        spawnCount++; alive = 40; this.lastWave = wave;
+        spawnCount++; alive = INVADERS_PER_WAVE; this.lastWave = wave;
     }
 };
 scene.sound = { play() {} };
@@ -426,7 +492,7 @@ scene.physics = {
     overlap(group) {
     inOverlap = true;
     if (group === scene.assetManager.bullets.getChildren()) {
-        for (let i = 0; i < 40; i++) {
+        for (let i = 0; i < INVADERS_PER_WAVE; i++) {
             const bullet = new Sprite(scene);
             const alien = new Alien(scene, 0, 0);
             const kill = alien.kill.bind(alien);
@@ -454,7 +520,7 @@ transitionBullets.push(pooledShot);
 scene.update();
 assert.equal(scene.state, GameState.WaveTransition);
 assert.equal(scene.wave, 1);
-assert.equal(score.score, 1400);
+assert.equal(score.score, 1240);
 assert.equal(score.remaining, 3);
 assert.equal(score.message, 'WAVE 2', 'announce the upcoming wave immediately');
 assert.equal(scene.nextWaveReadyAt, 1600);
@@ -500,7 +566,7 @@ scene._enemyFires();
 scene._enemyBulletHitPlayer(scene.player, new Sprite(scene));
 scene._bulletHitAliens(new Sprite(scene), new Alien(scene, 0, 0));
 assert.equal(score.remaining, 3);
-assert.equal(score.score, 1400);
+assert.equal(score.score, 1240);
 // Use actual Bullet.update() to expire shots naturally as physics moves them.
 flyingShot.y += flyingShot.velocityY;
 trailingShot.y += trailingShot.velocityY;
@@ -534,7 +600,7 @@ assert.equal(scene.wave, 2);
 assert.equal(score.waveLabel, 'WAVE 2');
 assert.equal(score.message, '', 'hide the centered announcement on spawn');
 assert.equal(scene.alienManager.lastWave, 2);
-assert.equal(alive, 40);
+assert.equal(alive, 24);
 assert.equal(scene.firingTimer, 3800);
 assert.equal(transitionBullets.length, 4, 'holding Space resumes firing on the spawn frame');
 assert.equal(scene.player.velocityX, 200);
@@ -549,7 +615,7 @@ scene._shipKeyboardHandler = () => {};
 scene.physics.overlap = combatOverlap;
 scene.update();
 assert.equal(scene.state, GameState.WaveTransition);
-assert.equal(score.score, 2800);
+assert.equal(score.score, 2480);
 assert.equal(score.message, 'WAVE 3');
 assert.equal(scene.nextWaveReadyAt, 3300);
 scene.physics.overlap = () => {};
@@ -604,7 +670,7 @@ assert.equal(scene.player.texture.key, 'ship', 'a fresh game starts in the idle 
 assert.equal(score.message, '');
 assert.equal(scene.nextWaveReadyAt, 0);
 assert.equal(scene.player.x, 400);
-assert.equal(scene.player.y, 500);
+assert.equal(scene.player.y, Ship.startPosition(scene).y);
 assert(scene.player.active);
 assert(stopCount > 0);
 // A full restart during draining discards the pending wave and clears shots.
@@ -656,10 +722,44 @@ const assertInside = () => survivors().forEach(alien => {
     near(alien.collisionX, alien.x);
     near(alien.collisionY, alien.y);
 });
-assert.equal(survivors().length, 40);
+assert.equal(survivors().length, 24);
 assert(survivors().every(alien => alien.enemyType === EnemyType.Ponke && alien.texture.key === 'ponke-right'));
-assert.equal(formation.rowSpacing, 50);
-const descent = formation.rowSpacing / 2;
+assert.equal(FORMATION_COLUMNS, 6); assert.equal(FORMATION_ROWS, 4);
+assert.equal(INVADERS_PER_WAVE, 24); assert.equal(formation.aliens.maxSize, 24);
+assert.equal(formation.columnSpacing, 88);
+assert.equal(formation.rowSpacing, 74); assert.equal(formation.descentStep, 25);
+function assertFormationFits() {
+    const aliens = survivors();
+    aliens.forEach((alien, i) => {
+        near(alien.width * alien.scaleX, 67.2 * 1.30);
+        near(alien.height * alien.scaleY, (67.2 * 282 / 337) * 1.30);
+        near(alien.scaleX, alien.scaleY);
+        assert(alien.getBounds().left >= -1e-7 && alien.getBounds().right <= 800 + 1e-7);
+        if (i % FORMATION_COLUMNS < FORMATION_COLUMNS - 1) {
+            near(aliens[i + 1].x - alien.x, 88);
+            assert(alien.getBounds().right <= aliens[i + 1].getBounds().left + 1e-7);
+        }
+        if (i < FORMATION_COLUMNS * (FORMATION_ROWS - 1)) {
+            near(aliens[i + FORMATION_COLUMNS].y - alien.y, 74);
+            assert(alien.getBounds().bottom < aliens[i + FORMATION_COLUMNS].getBounds().top);
+        }
+    });
+}
+assertFormationFits();
+const initialBounds = () => ({
+    left: Math.min(...survivors().map(alien => alien.getBounds().left)),
+    right: Math.max(...survivors().map(alien => alien.getBounds().right)),
+    top: Math.min(...survivors().map(alien => alien.getBounds().top)),
+    bottom: Math.max(...survivors().map(alien => alien.getBounds().bottom))
+});
+const fullFormationBounds = initialBounds();
+near((fullFormationBounds.left + fullFormationBounds.right) / 2, 400);
+near(fullFormationBounds.right - fullFormationBounds.left, 527.36);
+near(fullFormationBounds.bottom - fullFormationBounds.top, 3 * 74 + 87.36 * 282 / 337);
+assert(fullFormationBounds.top >= 0 && fullFormationBounds.bottom <= 600);
+assert.equal(new Set(survivors().map(alien => alien.x)).size, 6);
+assert.equal(new Set(survivors().map(alien => alien.y)).size, 4);
+const descent = formation.descentStep;
 const originalPositions = survivors().map(alien => [alien.x, alien.y]);
 formation.update(1000, 10000);
 survivors().forEach((alien, i) => {
@@ -668,7 +768,7 @@ survivors().forEach((alien, i) => {
 });
 assertInside();
 // Reach the right edge using the current skin's visual bounds.
-const rightTravel = 800 - (originalPositions[9][0] + survivors()[9].width * survivors()[9].scaleX / 2);
+const rightTravel = 800 - fullFormationBounds.right;
 formation.update((rightTravel - 100) * 10, 10000);
 assert(survivors().every(alien => alien.texture.key === 'ponke-left'), 'switch at the right edge immediately');
 survivors().forEach((alien, i) => {
@@ -684,10 +784,10 @@ assertInside();
 // Empty outer columns change the next boundary, without repacking survivors.
 formation.reset();
 formation.aliens.getChildren().forEach((alien, i) => {
-    if (i % 10 === 0 || i % 10 === 9) alien.active = false;
+    if (i % FORMATION_COLUMNS === 0 || i % FORMATION_COLUMNS === FORMATION_COLUMNS - 1) alien.active = false;
 });
 const sparsePositions = survivors().map(alien => [alien.x, alien.y]);
-const sparseMultiplier = 1 + 0.5 * (40 - survivors().length) / 39;
+const sparseMultiplier = 1 + 0.5 * (INVADERS_PER_WAVE - survivors().length) / (INVADERS_PER_WAVE - 1);
 const sparseTravel = 800 - Math.max(...survivors().map(alien => alien.getBounds().right));
 formation.update((sparseTravel - 1) * 10 / sparseMultiplier, 10000);
 assert.equal(formation.direction, 1);
@@ -701,10 +801,10 @@ survivors().forEach((alien, i) => {
 // Empty rows stay empty, and gaps inside the formation remain unchanged.
 formation.reset();
 formation.aliens.getChildren().forEach((alien, i) => {
-    if (i < 10 || (i >= 20 && i < 30) || i % 10 === 4) alien.active = false;
+    if (i < FORMATION_COLUMNS || (i >= 2 * FORMATION_COLUMNS && i < 3 * FORMATION_COLUMNS) || i % FORMATION_COLUMNS === 4) alien.active = false;
 });
 const gappedPositions = survivors().map(alien => [alien.x, alien.y]);
-const gappedMultiplier = 1 + 0.5 * (40 - survivors().length) / 39;
+const gappedMultiplier = 1 + 0.5 * (INVADERS_PER_WAVE - survivors().length) / (INVADERS_PER_WAVE - 1);
 formation.update(rightTravel * 10 / gappedMultiplier, 10000);
 survivors().forEach((alien, i) => {
     near(alien.x, gappedPositions[i][0] + rightTravel);
@@ -717,7 +817,9 @@ const lone = survivors()[0];
 const halfWidth = lone.width * lone.scaleX / 2;
 formation.update((800 - halfWidth - lone.x) * 10 / 1.5, 10000);
 near(lone.x, 800 - halfWidth); near(lone.y, 100 + descent);
-formation.update((800 - halfWidth * 2) * 10 / 1.5, 10000);
+// Step infinitesimally past arrival to avoid decimal round-off stopping a
+// synthetic frame just short of the boundary; movement assertions allow 1e-7px.
+formation.update((800 - halfWidth * 2) * 10 / 1.5 + 1e-8, 10000);
 assert.equal(lone.texture.key, 'ponke-right', 'switch at the left edge immediately');
 near(lone.x, halfWidth); near(lone.y, 100 + descent * 2);
 assert.equal(formation.direction, 1);
@@ -729,11 +831,22 @@ for (const wave of [2, 3, 4, 5, 99, 100]) {
     formation.reset(wave);
     const expectedType = wave % 2 ? EnemyType.Ponke : EnemyType.Pepe;
     const expectedTexture = wave % 2 ? 'ponke-right' : 'alien';
-    assert.equal(survivors().length, 40);
+    assert.equal(survivors().length, 24);
     assert(survivors().every(alien => alien.enemyType === expectedType && alien.texture.key === expectedTexture));
-    formation.update(rightTravel / formation.speed * 1000, 10000);
+    assertFormationFits();
+    near((initialBounds().left + initialBounds().right) / 2, 400);
+    formation.update(rightTravel / formation.speed * 1000 + 1e-8, 10000);
     assert.equal(formation.direction, -1);
     assert(survivors().every(alien => alien.texture.key === (wave % 2 ? 'ponke-left' : 'alien')));
+    near(initialBounds().right, 800);
+    assertFormationFits();
+    const fullSweep = 800 - (fullFormationBounds.right - fullFormationBounds.left);
+    formation.update(fullSweep / formation.speed * 1000 + 1e-8, 10000);
+    near(initialBounds().left, 0);
+    assert.equal(formation.direction, 1);
+    assert(survivors().every(alien => alien.texture.key === expectedTexture));
+    assertFormationFits();
+    near(survivors()[0].y, originalPositions[0][1] + 2 * 25);
 }
 // The visual change cannot alter origin, scale, collision geometry or velocity.
 const typedAlien = new Alien({}, 250, 200);
@@ -741,6 +854,10 @@ typedAlien.angle = 0;
 typedAlien.body = new ArcadeBody({ defaults: {}, bounds: {} }, typedAlien);
 for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
     typedAlien.configure(type, 1);
+    near(typedAlien.body.width, 247 * 67.2 * 1.30 / 337);
+    near(typedAlien.body.height, 210 * 67.2 * 1.30 / 337);
+    near(typedAlien.width * typedAlien.scaleX, 67.2 * 1.30);
+    near(typedAlien.height * typedAlien.scaleY, (67.2 * 282 / 337) * 1.30);
     typedAlien.body.velocity.set(42, 7);
     const geometry = () => [typedAlien.x, typedAlien.y, typedAlien.scaleX, typedAlien.scaleY,
         typedAlien.originX, typedAlien.originY, typedAlien.body.left, typedAlien.body.top,
@@ -787,10 +904,12 @@ for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
 }
 // Frame splitting does not change the result, even when crossing several edges.
 formation.reset(1000);
+const expectedReversals = 1 + Math.floor((formation.speed * 10 - rightTravel) /
+    (800 - (fullFormationBounds.right - fullFormationBounds.left)));
 formation.update(10000, 10000);
 assertInside();
 survivors().forEach(alien => near(alien.y,
-    originalPositions[formation.aliens.getChildren().indexOf(alien)][1] + descent * 10));
+    originalPositions[formation.aliens.getChildren().indexOf(alien)][1] + descent * expectedReversals));
 const longFrame = survivors().map(alien => [alien.x, alien.y]);
 formation.reset(1000);
 for (let i = 0; i < 100; i++) formation.update(100, 10000);
@@ -808,16 +927,16 @@ assertInside();
 [1, 2, 1000].forEach(wave => {
     const baseSpeed = 200 / (Math.max(600, 2000 / (1 + 0.10 * (wave - 1))) / 1000);
     let previousSpeed = 0;
-    for (let count = 40; count >= 1; count--) {
+    for (let count = INVADERS_PER_WAVE; count >= 1; count--) {
         formation.reset(wave);
         formation.aliens.getChildren().forEach((alien, i) => { alien.active = i < count; });
         const before = survivors().map(alien => [alien.x, alien.y]);
         formation.update(100, 10000);
         const measuredSpeed = (survivors()[0].x - before[0][0]) / 0.1;
-        near(measuredSpeed, baseSpeed * (1 + 0.5 * (40 - count) / 39));
+        near(measuredSpeed, baseSpeed * (1 + 0.5 * (INVADERS_PER_WAVE - count) / (INVADERS_PER_WAVE - 1)));
         assert(measuredSpeed >= previousSpeed - 1e-7);
         assert(measuredSpeed <= baseSpeed * 1.5 + 1e-7);
-        if (count === 40) near(measuredSpeed, baseSpeed);
+        if (count === INVADERS_PER_WAVE) near(measuredSpeed, baseSpeed);
         if (count === 1) near(measuredSpeed, baseSpeed * 1.5);
         survivors().forEach((alien, i) => {
             near(alien.x - before[i][0], measuredSpeed * 0.1);
@@ -847,7 +966,7 @@ survivors().forEach((alien, i) => {
 });
 formation.update(100, 10000);
 survivors().forEach((alien, i) => {
-    near(alien.x, acceleratingPositions[i][0] - 10 * (1 + 0.5 * 20 / 39));
+    near(alien.x, acceleratingPositions[i][0] - 10 * (1 + 0.5 * 12 / 23));
     near(alien.y, acceleratingPositions[i][1]);
 });
 assert.equal(formation.direction, -1);
@@ -861,7 +980,7 @@ formation.reset();
 assert.equal(formation.direction, 1);
 assert.equal(formation.movementStopped, false);
 assert.equal(formation.speed, 100);
-assert.equal(survivors().length, 40);
+assert.equal(survivors().length, 24);
 // Equality at the defensive line triggers invasion even without a descent.
 formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
 const bodyBottomOffset = survivors()[0].body.bottom - survivors()[0].y;
@@ -898,7 +1017,7 @@ assert.equal(scene.state, GameState.Playing);
 assert.equal(scene.wave, 1);
 assert.equal(score.score, 0);
 assert.equal(score.remaining, 3);
-assert.equal(survivors().length, 40);
+assert.equal(survivors().length, 24);
 assert.equal(formation.direction, 1);
 assert.equal(formation.movementStopped, false);
 assert.equal(score.message, '');
@@ -940,7 +1059,12 @@ assert.equal(bananaTrajectory(400, 150, 401, 500, 12, 788).landingX, 500);
 const bombScene = {
     time: { now: 1000 },
     physics: { world: { bounds: { left: 0, right: 800 } } },
-    add: { sprite: (x, y, texture) => new Sprite(bombScene, x, y, texture) }
+    add: { sprite(x, y, texture) {
+        const sprite = new Sprite(bombScene, x, y, texture);
+        const png = fs.readFileSync(path.resolve(__dirname, '../assets/meme-skins/ponke-weapon.png'));
+        sprite.width = png.readUInt32BE(16); sprite.height = png.readUInt32BE(20);
+        return sprite;
+    } }
 };
 const blastSprites = [];
 const blastGroup = { get() {
@@ -951,6 +1075,39 @@ const blastGroup = { get() {
 } };
 let bombHits = 0;
 const bombs = new BananaBombs(bombScene, blastGroup, () => bombHits++);
+assert.equal(BananaSettings.displayWidth, 36 * 1.5);
+assert.equal(BananaSettings.landingInset, 12);
+assert.equal(BananaSettings.rotationSpeed, 65);
+assert.equal(BananaSettings.visualScale, 1);
+assert.equal(BananaSettings.hitRadius, 48);
+assert.equal(BananaSettings.damageDurationMs, 150);
+// Enlarging the visual must not move edge landings from their original 12/788px
+// bounds or change the launch point, flight duration, or sampled arc positions.
+for (const [x, targetX, landingX] of [[20, 0, 12], [780, 800, 788]]) {
+    const edgeBombs = new BananaBombs(bombScene, blastGroup, () => assert.fail('flying bananas are harmless'));
+    edgeBombs.launch(x, 150, targetX, 500);
+    const edgeFlight = edgeBombs.flights[0];
+    const oldPath = bananaTrajectory(x, 150, targetX, 500, 12, 788);
+    near(edgeFlight.path.landingX, landingX);
+    near(edgeFlight.sprite.x, x); near(edgeFlight.sprite.y, 150);
+    near(edgeFlight.path.duration, oldPath.duration);
+    for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
+        const seconds = fraction * oldPath.duration;
+        const before = oldPath.position(seconds), after = edgeFlight.path.position(seconds);
+        near(after.x, before.x); near(after.y, before.y);
+    }
+    edgeBombs.clear();
+}
+let loweredPlayerHits = 0;
+const loweredBombs = new BananaBombs(bombScene, blastGroup, () => loweredPlayerHits++);
+loweredBombs.launch(200, 150, enlargedPlayer.x, enlargedPlayer.y);
+bombScene.time.now += loweredBombs.flights[0].path.duration * 1000 + 1;
+loweredBombs.update(enlargedPlayer);
+assert.equal(loweredPlayerHits, 1, 'banana landing at the new DOGE line still damages its real collision body');
+near(blastSprites[blastSprites.length - 1].y, spawn.y);
+loweredBombs.clear();
+blastSprites.length = 0;
+bombScene.time.now = 1000;
 const doge = new Sprite(bombScene, 400, 500, 'ship');
 function dogeAt(x, y = 500) {
     doge.setPosition(x, y);
@@ -960,12 +1117,16 @@ dogeAt(400);
 bombs.launch(200, 150, doge.x, doge.y);
 const flight = bombs.flights[0];
 assert.equal(flight.sprite.texture.key, 'ponke-banana');
+near(flight.sprite.width * flight.sprite.scaleX, 36 * 1.5);
+near(flight.sprite.height * flight.sprite.scaleY, 24 * 1.5);
+near(flight.sprite.scaleX, flight.sprite.scaleY);
+near(flight.sprite.x, 200); near(flight.sprite.y, 150);
 // Mock Sprites have a body; production scene.add.sprite creates no Arcade body.
 bombScene.time.now = 1000 + arc.duration * 500;
 dogeAt(midpoint.x, midpoint.y);
 bombs.update(doge);
 near(flight.sprite.x, midpoint.x); near(flight.sprite.y, midpoint.y);
-assert(flight.sprite.angle > 0);
+near(flight.sprite.angle, arc.duration / 2 * 65);
 assert.equal(bombHits, 0, 'flying bananas are harmless even at DOGE');
 dogeAt(700);
 bombScene.time.now = 1000 + arc.duration * 1000 + 1;
@@ -1162,7 +1323,7 @@ const recoveryScene = new MainScene();
 recoveryScene.game = { canvas: { width: 800, height: 600 } };
 recoveryScene.add = { text: () => ({ setText() { return this; }, setOrigin() { return this; } }) };
 let lifeIcons = [], livesGroupConfig;
-recoveryScene.physics = { add: { group(config) {
+recoveryScene.physics = { world: { bounds: { left: 0, right: 800, top: 0, bottom: 600 } }, add: { group(config) {
     livesGroupConfig = config;
     return {
         clear() { lifeIcons.forEach(icon => icon.destroy()); lifeIcons = []; },
@@ -1263,3 +1424,5 @@ console.log('PASS: banana selection, fixed arcs, explosion-only damage, radius/w
 console.log('PASS: shared DOGE feedback, damage gates, PEPE impact removal, directional tint, pulse coalescing, HUD life accounting, GAME OVER and shutdown cleanup.');
 console.log('PASS: capped new-wave life recovery (1 to 2, 2 to 3, 3 to 3), immediate HUD, transition gates, no duplicates or revival, initial Wave 1 and restart.');
 console.log('PASS: fixed HUD slots [1,2,3] -> [2,3] -> [3] -> [2,3] -> [1,2,3], zero lives and restart; lost leftmost icon retains damage flash.');
+console.log('PASS: approved DOGE size/margins/edge limits unchanged; centered 6x4 alternating waves, exact 1.30x invader sizing and proportional bodies, no overlap, unchanged speeds/25px descent and canvas boundaries.');
+console.log('PASS: flying banana 36x24 -> 54x36 (+50%), unchanged launch/arc/rotation including edge landings, unchanged yellow explosion scale/radius/window and explosion-only damage.');

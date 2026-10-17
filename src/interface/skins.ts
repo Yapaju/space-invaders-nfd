@@ -10,18 +10,20 @@ export interface SkinDefinition {
     hitbox: { x: number; y: number; width: number; height: number };
 }
 
+export const PlayerVisualScale = 1.4;
+
 export const MemeSkins: { Player: SkinDefinition; Invader: SkinDefinition } = {
     Player: {
         asset: AssetType.Ship,
         path: 'meme-skins/doge-player.png',
-        displayWidth: 52,
+        displayWidth: 52 * PlayerVisualScale,
         originX: 190 / 335, originY: 0.45,
         hitbox: { x: 100, y: 42, width: 180, height: 195 }
     },
     Invader: {
         asset: AssetType.Alien,
         path: 'meme-skins/pepe-invader.png',
-        displayWidth: 40,
+        displayWidth: 48 * 1.4 * 1.30,
         originX: 0.5, originY: 0.5,
         hitbox: { x: 45, y: 25, width: 247, height: 210 }
     }

@@ -1,9 +1,12 @@
 import { Alien } from "../alien";
-import { getWaveConfiguration } from "../wave-config";
+import { getWaveConfiguration, FORMATION_COLUMNS, FORMATION_ROWS, INVADERS_PER_WAVE } from "../wave-config";
 
 export class AlienManager {
     aliens: Phaser.Physics.Arcade.Group;
-    readonly rowSpacing = 50;
+    // Minimum whole-pixel spacing for the enlarged 87.36 x 73.10px frames.
+    readonly columnSpacing = 88;
+    readonly rowSpacing = 74;
+    readonly descentStep = 25;
     private direction = 1;
     private movementStopped = false;
     private speed = 100;
@@ -13,7 +16,7 @@ export class AlienManager {
 
     constructor(private _scene: Phaser.Scene) {
         this.aliens = this._scene.physics.add.group({
-            maxSize: 40,
+            maxSize: INVADERS_PER_WAVE,
             classType: Alien,
             runChildUpdate: true
         });
@@ -74,7 +77,7 @@ export class AlienManager {
             if (step < distance) {
                 break;
             }
-            this._move(aliens, 0, this.rowSpacing / 2);
+            this._move(aliens, 0, this.descentStep);
             this.direction *= -1;
             aliens.forEach(alien => alien.setDirection(this.direction));
             if (reachedPlayer()) {
@@ -96,14 +99,15 @@ export class AlienManager {
     }
 
     private _sortAliens(wave = 1) {
-        let ORIGIN_X = 100;
+        const bounds = this._scene.physics.world.bounds;
+        const ORIGIN_X = (bounds.left + bounds.right) / 2 - (FORMATION_COLUMNS - 1) * this.columnSpacing / 2;
         let ORIGIN_Y = 100;
         const config = getWaveConfiguration(wave);
         this.aliens.clear(true, true);
-        for (let y = 0; y < 4; y++) {
-            for (let x = 0; x < 10; x++) {
-                let alien: Alien = this.aliens.create(ORIGIN_X + x * 48, ORIGIN_Y + y * this.rowSpacing);
-                alien.configure(config.enemies[y * 10 + x], this.direction);
+        for (let y = 0; y < FORMATION_ROWS; y++) {
+            for (let x = 0; x < FORMATION_COLUMNS; x++) {
+                let alien: Alien = this.aliens.create(ORIGIN_X + x * this.columnSpacing, ORIGIN_Y + y * this.rowSpacing);
+                alien.configure(config.enemies[y * FORMATION_COLUMNS + x], this.direction);
                 alien.setImmovable(false);
             }
         }

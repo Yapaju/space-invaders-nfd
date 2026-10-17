@@ -11,7 +11,9 @@ export const BananaSettings = {
     minHorizontalDisplacement: 100,
     maxHorizontalDisplacement: 260,
     rotationSpeed: 65,
-    displayWidth: 24,
+    displayWidth: 36 * 1.5,
+    // Keep the original landing bounds independent of flying-sprite size.
+    landingInset: 12,
     visualScale: 1,
     hitRadius: 48,
     damageDurationMs: 150
@@ -60,7 +62,7 @@ export class BananaBombs {
     launch(x: number, y: number, targetX: number, landingY: number) {
         const bounds = this.scene.physics.world.bounds;
         const path = bananaTrajectory(x, y, targetX, landingY,
-            bounds.left + BananaSettings.displayWidth / 2, bounds.right - BananaSettings.displayWidth / 2);
+            bounds.left + BananaSettings.landingInset, bounds.right - BananaSettings.landingInset);
         // No Arcade body: flying bananas cannot overlap or damage DOGE.
         const sprite = this.scene.add.sprite(x, y, AssetType.Banana);
         sprite.setScale(BananaSettings.displayWidth / sprite.width);

@@ -254,7 +254,7 @@ export class MainScene extends Phaser.Scene {
         if (this.time.now > this.bulletTime) {
             let bullet: Bullet = this.assetManager.bullets.get();
             if (bullet) {
-                bullet.shoot(this.player.x, this.player.y - 18);
+                bullet.shoot(this.player.x, this.player.y - Ship.bulletOffset);
                 this.bulletTime = this.time.now + 200;
             }
         }
@@ -286,7 +286,8 @@ export class MainScene extends Phaser.Scene {
         this.wave = 1;
         this.state = GameState.Playing;
         Ship.setDirection(this.player, 0);
-        this.player.enableBody(true, 400, 500, true, true);
+        const position = Ship.startPosition(this);
+        this.player.enableBody(true, position.x, position.y, true, true);
         (this.player.body as Phaser.Physics.Arcade.Body).preUpdate(false, 0);
         this.player.setVelocity(0, 0);
         this.scoreManager.setHighScore();
