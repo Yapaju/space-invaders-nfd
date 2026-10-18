@@ -17,7 +17,9 @@ import { DamageFeedback } from "../interface/damage-feedback";
 import { GoldenUiAssets } from "../interface/golden-number";
 import { ElonAlly } from "../interface/elon-ally";
 import { RapidFire, RapidFireSettings } from "../interface/rapid-fire";
-import { WojakBoss, WojakPoses, WojakSettings, shouldStartWojakTest } from "../interface/wojak-boss";
+import { WojakBoss, WojakAssets, WojakSettings, shouldStartWojakTest } from "../interface/wojak-boss";
+import { CandleAssets } from "../interface/wojak-candles";
+import { TearAsset } from "../interface/wojak-tears";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -56,7 +58,9 @@ export class MainScene extends Phaser.Scene {
         });
         this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
         this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
-        WojakPoses.forEach(pose => this.load.image(pose.asset, pose.path));
+        WojakAssets.forEach(pose => this.load.image(pose.asset, pose.path));
+        CandleAssets.forEach(candle => this.load.image(candle.asset, candle.path));
+        this.load.image(TearAsset.asset, TearAsset.path);
         this.load.image(AssetType.ElonRight, "meme-skins/elon-ally-right.png");
         this.load.image(AssetType.ElonLeft, "meme-skins/elon-ally-left.png");
         this.load.image(AssetType.ElonHitRight, "meme-skins/elon-ally-hit-right.png");
@@ -157,6 +161,7 @@ export class MainScene extends Phaser.Scene {
             this._shipKeyboardHandler();
             if (!complete) this.physics.overlap(this.assetManager.bullets.getChildren(),
                 [this.wojak.sprite], this._bulletHitWojak, null, this);
+            if (!complete) this.wojak.updateWeapons(delta, this.player, () => this._damagePlayer());
             const cleanup = this.pendingCleanup;
             this.pendingCleanup = [];
             cleanup.forEach(action => action());
@@ -277,7 +282,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _damagePlayer() {
-        if (this.state !== GameState.Playing || !this.player.active) return;
+        if ((this.state !== GameState.Playing && this.state !== GameState.BossEncounter) || !this.player.active) return;
         // Icons stay fixed: remove the leftmost active slot.
         let live: Phaser.GameObjects.Sprite = this.scoreManager.lives.getFirstAlive();
         if (!live) return;

@@ -6,7 +6,7 @@ export default function copyMemeSkins() {
     return {
         name: 'copy-meme-skins',
         buildStart() {
-            ['meme-skins', 'texts', 'font', 'weapons/rapid-laser', 'mini-boss/wojak'].forEach(folder => {
+            ['meme-skins', 'texts', 'font', 'weapons/rapid-laser', 'weapons/wojak-red-candle', 'weapons/wojak-tear', 'mini-boss/wojak'].forEach(folder => {
                 const source = path.resolve('assets', folder);
                 const destination = path.resolve('dist/assets', folder);
                 fs.mkdirSync(destination, { recursive: true });

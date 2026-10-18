@@ -1,7 +1,7 @@
 import { AssetType } from './assets';
 import { visibleImageBounds } from './skins';
 
-export const ELON_VISUAL_TEST_OVERRIDE = true;
+export const ELON_VISUAL_TEST_OVERRIDE = false;
 export const ElonAppearancePresets = {
     production: { firstWave: 3, appearanceChance: 0.30 },
     visualTest: { firstWave: 2, appearanceChance: 1 }
