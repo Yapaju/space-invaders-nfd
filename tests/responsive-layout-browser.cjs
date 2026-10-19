@@ -77,7 +77,8 @@ async function serve(route) {
             await page.evaluate(({ width, height }) => {
                 const check = (ok, message) => { if (!ok) throw Error(message); };
                 const g = testGame, r = g.canvas.getBoundingClientRect();
-                check(g.canvas.width===800 && g.canvas.height===600, 'logical canvas resized');
+                check(g.canvas.width===1600 && g.canvas.height===1200, 'default backing buffer');
+                check(g.scale.gameSize.width===800 && g.scale.gameSize.height===600, 'logical game resized');
                 check(s.physics.world.bounds.width===800 && s.physics.world.bounds.height===600, 'world resized');
                 check(s.cameras.main.width===800 && s.cameras.main.height===600, 'camera resized');
                 check(snapshot()===original, 'resize moved/scaled scene objects');
@@ -137,7 +138,7 @@ async function serve(route) {
             s.restart(); if(s.wave!==1 || !s.player.active)throw Error('restart');
         });
         assert.deepEqual(errors, []);
-        console.log('PASS: real page/config, removed links, maximum 4:3 fit and centering, fixed 800x600 canvas/world/camera, unchanged scene/HUD geometry, no scrollbars, resize, pointer mapping, keyboard movement/shooting, REKT/PUMP IT/candle synchronization, exit and restart.');
+        console.log('PASS: real page/config, default 1600x1200 backing buffer, maximum 4:3 fit and centering, fixed 800x600 logical world/camera, unchanged scene/HUD geometry, no scrollbars, resize, pointer mapping, keyboard movement/shooting, REKT/PUMP IT/candle synchronization, exit and restart.');
     } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode=1; });
 

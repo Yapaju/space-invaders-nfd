@@ -16,7 +16,7 @@ export class RapidFire {
         private onIntervalChange: (previous: number, current: number) => void,
         private canShoot: () => boolean) {
         this.indicator = new BuffIndicator(scene, {
-            x: scene.game.canvas.width / 2, y: BuffIndicatorSettings.y, duration: RapidFireSettings.duration,
+            x: scene.scale.gameSize.width / 2, y: BuffIndicatorSettings.y, duration: RapidFireSettings.duration,
             ringColor: RapidFireSettings.ringColor, digitColor: RapidFireSettings.digitColor,
             warningRingColor: null
         });

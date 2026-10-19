@@ -1390,6 +1390,7 @@ feedback.destroy();
 const recoveryScene = new MainScene();
 recoveryScene.wojakCompleted = true; // Isolate ordinary new-wave life recovery.
 recoveryScene.game = { canvas: { width: 800, height: 600 } };
+recoveryScene.scale = { gameSize: { width: 800, height: 600 } };
 recoveryScene.add = { image: (x, y, key) => uiImage(recoveryScene, x, y, key) };
 let uiShutdownListeners = [];
 recoveryScene.events = {
@@ -2074,6 +2075,7 @@ const bonusScene = new MainScene();
 const bonusGraphics = [], bonusDigits = [], bonusShots = [];
 bonusScene.events = new EventEmitter();
 bonusScene.game = { canvas: { width: 800, height: 600 }, loop: { time: 1000 } };
+bonusScene.scale = { gameSize: { width: 800, height: 600 } };
 bonusScene.sys = { events: bonusScene.events, game: bonusScene.game };
 bonusScene.time = new Clock(bonusScene);
 bonusScene.events.emit('boot'); bonusScene.events.emit('start');
@@ -2708,6 +2710,7 @@ assert.equal(WojakSettings.afterWave, WOJAK_TRIGGER_AFTER_WAVE);
 const encounter = new MainScene(), encounterShots = [], encounterWaves = [];
 let encounterInvaders = [], encounterLifeRecoveries = 0, encounterLives = 2, encounterOverlap = false;
 encounter.events = new EventEmitter(); encounter.game = { canvas: { width: 800, height: 600 }, loop: { time: 1000 } };
+encounter.scale = { gameSize: { width: 800, height: 600 } };
 encounter.sys = { events: encounter.events, game: encounter.game };
 encounter.time = new Clock(encounter); encounter.events.emit('boot'); encounter.events.emit('start');
 encounter.state = GameState.Playing; encounter.wave = WOJAK_TRIGGER_AFTER_WAVE;

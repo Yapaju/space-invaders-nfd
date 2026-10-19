@@ -26,7 +26,7 @@ export class ScoreManager {
   }
 
   private _init() {
-    const { width: SIZE_X, height: SIZE_Y } = this._scene.game.canvas;
+    const { width: SIZE_X, height: SIZE_Y } = this._scene.scale.gameSize;
     this.scoreLabel = this._scene.add.image(20, 10, UiTexture.Score).setOrigin(0, 0).setDepth(UiDepth.Hud);
     this.scoreLabel.setScale(22 / this.scoreLabel.height);
     this.scoreText = new GoldenNumber(this._scene, {
@@ -62,7 +62,7 @@ export class ScoreManager {
   }
 
   resetLives() {
-    let SIZE_X = this._scene.game.canvas.width;
+    let SIZE_X = this._scene.scale.gameSize.width;
     this.lives.clear(true, true)
     for (let i = 0; i < MAX_LIVES; i++) {
       let ship: Phaser.GameObjects.Sprite = this.lives.create(

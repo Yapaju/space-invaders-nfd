@@ -1,5 +1,6 @@
 import 'phaser';
 import { MainScene } from './scenes/main';
+import { installRenderBufferExperiment } from './interface/render-buffer-experiment';
 
 const config: Phaser.Types.Core.GameConfig = {
     title: "Space Invaders",
@@ -11,6 +12,7 @@ const config: Phaser.Types.Core.GameConfig = {
         mode: Phaser.Scale.FIT,
         autoCenter: Phaser.Scale.CENTER_BOTH
     },
+    callbacks: { postBoot: installRenderBufferExperiment },
     scene: MainScene,
     physics: {
         default: "arcade"
