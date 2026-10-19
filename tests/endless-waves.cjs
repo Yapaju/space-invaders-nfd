@@ -2328,8 +2328,8 @@ for (const [value, text] of [[50, '+50%'], [25, '+25%'], [1, '+1%'], [0, '0%'], 
 // Wojak uses the actual supplied PNGs and a real Arcade physics rectangle.
 const wojakImages = new Map(WojakAssets.map(pose => {
     const png = decodePng(fs.readFileSync(path.resolve(__dirname, '../assets', pose.path)));
-    assert.equal(png.width, pose.asset === 'wojak-god-candle' ? 1024 : 1536);
-    assert.equal(png.height, pose.asset === 'wojak-god-candle' ? 1536 : 1024);
+    assert.equal(png.width, pose.asset === 'wojak-god-candle' ? 1024 : pose.asset === 'wojak-pump-it' ? 1774 : 1536);
+    assert.equal(png.height, pose.asset === 'wojak-god-candle' ? 1536 : pose.asset === 'wojak-pump-it' ? 887 : 1024);
     assert(png.pixels.some((value, i) => i % 4 === 3 && value === 0));
     assert(png.pixels.some((value, i) => i % 4 === 3 && value > 0 && value < 255));
     return [pose.asset, png];
@@ -2464,13 +2464,14 @@ for (let hit = 1; hit <= 150; hit++) {
     assert(firstWojak.getBounds().left >= 0 && firstWojak.getBounds().right <= 800);
 }
 assert.equal(unitWojak.phase, WojakPhase.Complete); assert.equal(unitWojak.hit(), false);
-assert.equal(unitWojak.update(999), false); assert(!firstWojak.destroyed);
+assert.equal(unitWojak.update(2949), false); assert(!firstWojak.destroyed);
 assert.equal(unitWojak.update(1), false);
-assert.equal(unitWojak.update(1600), true); assert(firstWojak.destroyed);
+assert.equal(unitWojak.update(3200), true); assert(firstWojak.destroyed);
 assert(initialLayers.every(layer => layer.destroyed));
 assert.equal(unitWojak.update(10000), false, 'completion fires once'); unitWojak.clear();
-// REKT holds for one second, then the original PNG grows and pushes every layer.
-assert.equal(WojakSettings.completionDuration, 1000);
+// PUMP IT finishes before the half-speed candle grows and pushes every layer.
+assert.equal(WojakSettings.godCandleRiseDuration, 1200);
+assert.equal(WojakSettings.godCandlePushDuration, 2000);
 for (const direction of [1, -1]) {
     const boss = new WojakBoss(wojakUnitScene);
     boss.start(); boss.update(1500); boss.direction = direction;
@@ -2488,7 +2489,7 @@ for (const direction of [1, -1]) {
     assert(boss.hit()); assert.equal(boss.portfolio, -99.9);
     assert.equal(boss.phase, WojakPhase.Complete); assert.equal(boss.shootingEnabled, false);
     assertWojakLayers(boss);
-    assert.equal(boss.percentage, existingDisplay); assert.equal(wojakVisuals.length, count);
+    assert.equal(boss.percentage, existingDisplay); assert.equal(wojakVisuals.length, count + 2);
     assert.equal(boss.percentage.text, 'REKT'); assert.equal(boss.lighting.visible, false);
     [boss.sprite, boss.character, boss.foreground].forEach(layer => assert.equal(layer.tint, undefined));
     assert(flyingCandle.destroyed && flyingTear.destroyed);
@@ -2499,7 +2500,7 @@ for (const direction of [1, -1]) {
     const frozen = positions(), patrol = boss.patrolElapsed;
     boss.updateWeapons(5000, { active: true }, () => assert.fail('defeated boss cannot damage player'));
     assert.equal(boss.hit(), false);
-    assert.equal(boss.update(400), false); assert.equal(boss.update(599), false);
+    assert.equal(boss.update(500), false); assert.equal(boss.update(2449), false);
     assert.deepEqual(positions(), frozen); assert.equal(boss.patrolElapsed, patrol);
     assert.equal(boss.direction, direction); assert(layers.every(layer => !layer.destroyed));
     assert.equal(boss.update(1), false);
@@ -2510,15 +2511,17 @@ for (const direction of [1, -1]) {
     assert(candle && !candle.body, 'pure visual candle cannot damage the player');
     const initialCrop = candle.crop.height, widthScale = candle.scaleX;
     near(candle.y + 134 * candle.scaleY, 600);
-    boss.update(300);
+    boss.update(600);
     assert(candle.crop.height > initialCrop, 'visible body grows instead of a fixed projectile');
     near(boss.sprite.y, frozen[0][1]);
-    boss.update(300);
+    near(candle.y + 134 * candle.scaleY, (600 + boss.candleContactY) / 2);
+    boss.update(600);
     const contactY = candle.y + 134 * candle.scaleY;
     near(contactY, boss.weaponGeometry().candles.y);
     const contactCrop = candle.crop.height;
-    for (let step = 0; step < 9; step++) {
+    for (let step = 0; step < 19; step++) {
         assert.equal(boss.update(100), false);
+        if (step === 9) near(boss.sprite.y, (boss.defeatY + boss.defeatExitY) / 2);
         near(candle.y + 134 * candle.scaleY, boss.weaponGeometry().candles.y);
         near(candle.scaleX, widthScale); near(candle.scaleY, widthScale);
         near(extension.y, candle.y + 1535 * candle.scaleY);
@@ -2537,6 +2540,55 @@ for (const direction of [1, -1]) {
     assert.equal(boss.update(1000), false, 'ending cannot advance progression twice');
     boss.start(); assert.equal(boss.percentage.text, '+50%'); assert(boss.lighting.visible);
     boss.clear();
+}
+// PUMP IT order, aspect ratio, readable bounds, fade and cancellation at each stage.
+for (const [width, height] of [[800, 600], [480, 800], [1280, 720]]) {
+    const bounds = wojakUnitScene.physics.world.bounds;
+    const saved = { ...bounds };
+    Object.assign(bounds, { left: 0, top: 0, right: width, bottom: height });
+    for (const shipX of [205, 400, 595]) for (const cancelAt of [0, 250, 499, 500, 1499, 1500, 1650, 1750, 2749, 2750, 2850, 2949, 2950, 3200, 3450]) {
+        const boss = new WojakBoss(wojakUnitScene);
+        boss.start(); boss.update(1500); boss.sprite.x = shipX; boss.portfolio = -99; boss.hit();
+        const character = boss.pumpCharacter, bubble = boss.pumpBubble;
+        assert.equal(character.y, height); assert.equal(bubble.visible, false);
+        assert(!character.body && !bubble.body);
+        const objects = wojakVisuals.length;
+        boss.update(cancelAt); boss.update(0);
+        assert.equal(wojakVisuals.length, objects + (cancelAt >= 2950 ? 2 : 0), 'no duplicate sprites');
+        const oldScale = Math.min(width * 0.48 / character.width, height * 0.48 / character.height);
+        near(character.scaleX, oldScale * 0.5);
+        near(character.getBounds().left, width * 0.02);
+        if (cancelAt < 3450) {
+            near(character.scaleX, character.scaleY); near(bubble.scaleX, bubble.scaleY);
+            if (cancelAt < 2950) assert.equal(bubble.visible, cancelAt >= 1500);
+            else assert(bubble.destroyed && !boss.pumpBubble, 'bubble removed before candle');
+            assert(character.depth > boss.percentage.depth && bubble.depth > character.depth);
+            const b = bubble.getBounds();
+            assert(b.left >= 0 && b.right <= width && b.top >= 0 && b.bottom <= height);
+            if (cancelAt >= 500) {
+                const c = character.getBounds();
+                assert(c.top < height && c.bottom > height, 'torso stays below canvas');
+            }
+            const finalY = height - character.height * oldScale * 0.5 * 0.86;
+            if (cancelAt >= 500 && cancelAt <= 2950) near(character.y, finalY);
+            if (cancelAt === 3200) near(character.y, (finalY + height) / 2);
+            if (cancelAt >= 1750 && cancelAt < 2950) {
+                near(bubble.scaleX, Math.min(width * 0.34 / bubble.width, height * 0.3 / bubble.height) * 0.5);
+                near(bubble.alpha, cancelAt <= 2750 ? 1 : 1 - (cancelAt - 2750) / 200);
+            }
+        } else {
+            assert(character.destroyed && bubble.destroyed);
+            assert(!boss.pumpCharacter && !boss.pumpBubble);
+        }
+        assert.equal(!!boss.godCandle, cancelAt >= 2950);
+        const candle = boss.godCandle;
+        boss.clear();
+        assert(character.destroyed && bubble.destroyed);
+        if (candle) assert(candle.destroyed);
+        boss.start(); assert.equal(boss.completionElapsed, 0);
+        assert(!boss.pumpCharacter && !boss.pumpBubble); boss.clear();
+    }
+    Object.assign(bounds, saved);
 }
 // A suspended/long frame still completes once and cleans the whole cinematic.
 {
@@ -2748,11 +2800,11 @@ assert.equal(encounter.wave, 1); assert.equal(encounterHudWave, 1);
 assert.equal(encounter.wojak.phase, WojakPhase.Complete); assert.equal(encounter.playerShootingEnabled, false);
 const excess = encounter.assetManager.bullets.get(); excess.shoot(encounterSprite.x, encounterSprite.y, true);
 const finalElapsed = encounter.rapidFire.timer.getElapsed();
-stepEncounter(999); assert(!encounterSprite.destroyed); assert(excess.active);
+stepEncounter(2949); assert(!encounterSprite.destroyed); assert(excess.active);
 assert.equal(encounter.wojak.portfolio, -99.9); near(encounter.rapidFire.timer.getElapsed(), finalElapsed);
 stepEncounter(1); assert(!encounterSprite.destroyed);
 assert.equal(encounter.state, GameState.BossEncounter);
-stepEncounter(1599); assert(!encounterSprite.destroyed);
+stepEncounter(3199); assert(!encounterSprite.destroyed);
 stepEncounter(1); assert(encounterSprite.destroyed); assert.equal(encounter.state, GameState.WaveTransition);
 assert.equal(encounter.wave, 1); assert.equal(encounterWaves.length, 0);
 assert.equal(encounterAnnouncement, 'WAVE 2'); encounter._startNextWave(); assert.equal(encounter.wave, 1);
@@ -2794,7 +2846,7 @@ for (const phase of [WojakPhase.Entrance, WojakPhase.Patrol, WojakPhase.Complete
 encounter.events.emit('shutdown');
 assert(wojakSprites.every(sprite => sprite.destroyed));
 assert(wojakVisuals.every(layer => layer.destroyed));
-console.log('PASS: Wojak entrance/patrol/bounds, transparent layer assets and original God Candle PNG, synchronized directional art/cockpit crops/text, all combat poses and threshold flashes, fractional boundary coverage, green/red lighting and +50% to -99.9% clamp, 1-point hits, directional REKT with lights off, 1000ms hold, growing God Candle and attached push/exit, weapon cancellation, single progression, Wave 2/life recovery, boost pausing and GAME OVER/restart cleanup.');
+console.log('PASS: Wojak combat/charts/threshold regressions, bottom-left PUMP IT at three ship positions and three viewport sizes, half-size sprites, 500ms entrance/1000ms pause/250ms pop/1000ms hold/200ms bubble fade, 2950ms candle launch with 500ms downward exit, cancellation at every phase, half-speed candle growth/contact/push/exit, single wave progression and lifecycle cleanup.');
 console.log('PASS: electric-red buff ring at all durations, red NFD digit palettes with identical alpha/shapes/layout, original golden HUD preserved, per-buff colors, unchanged wave pause/resume and expiration.');
 console.log('PASS: immediate Elon rapid fire (200ms / 1.5), exact 10s usable-gameplay timer, frozen announcement ring/digits, pause/timeScale, refresh, six-frame 14fps electric lasers with unchanged 6x36 bodies, no DOGE aura or runtime glow, preserved damage flash, expiration/restart/shutdown cleanup.');
 console.log('PASS: directional ally hit textures/bounds, misses, single player-shot consumption, enemy exclusion, stationary HIT, 250ms blue pulses, exact 1000ms HIT, aligned accelerating escape, wave/GAME OVER/restart and stale-deadline cleanup.');

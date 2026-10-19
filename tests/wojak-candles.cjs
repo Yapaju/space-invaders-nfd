@@ -147,7 +147,7 @@ h = harness(() => 0.99); h.advance(800);
 const boss = new WojakBoss(h.scene);
 boss.candles = h.weapon; boss.sprite = { active: true, destroy() {} };
 boss.phase = WojakPhase.Patrol; boss.portfolio = -99;
-boss.updatePercentage = boss.syncLayers = boss.updateFlash = () => {};
+boss.updatePercentage = boss.syncLayers = boss.updateFlash = boss.beginPump = () => {};
 assert(boss.hit()); assert.equal(boss.portfolio, -99.9);
 assert.equal(boss.phase, WojakPhase.Complete);
 assert.equal(h.weapon.pending.length, 0); assert(h.images.every(i => !i.active));
@@ -307,7 +307,7 @@ tears = tearHarness(); tears.advance(3500);
 const endBoss = new WojakBoss(tears.weapon.scene);
 endBoss.tears = tears.weapon; endBoss.sprite = { active: true, destroy() {} };
 endBoss.phase = WojakPhase.Patrol; endBoss.portfolio = -99;
-endBoss.updatePercentage = endBoss.syncLayers = endBoss.updateFlash = () => {};
+endBoss.updatePercentage = endBoss.syncLayers = endBoss.updateFlash = endBoss.beginPump = () => {};
 endBoss.hit(); assert(tears.sprites.every(s => !s.active), 'boss defeat clears tears synchronously');
 endBoss.clear(); assert.equal(tears.weapon.elapsed, 0);
 

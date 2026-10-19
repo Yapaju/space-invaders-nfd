@@ -95,16 +95,35 @@ async function serve(route) {
                 await page.evaluate(direction => {
                     if(s.wojak) s.wojak.clear();
                     s.state='playing'; s._startWojak();
-                    const b=s.wojak; b.update(1500); b.direction=direction; b.update(0);
+                    const b=s.wojak; b.update(1500); b.direction=direction; b.update(0); b.sprite.x=direction>0?205:595;
                     for(let i=0;i<150;i++) b.hit();
                     window.ship=b.sprite; window.startY=ship.y;
                     if(!b.character.texture.key.includes('rekt') || b.lighting.visible || b.percentage.text!=='REKT') throw Error('REKT presentation');
                 },direction);
-                for (const [name,delta] of [['hold',999],['start',1],['rise',300],['contact',300],['push',500],['exit',499]]) {
+                for (const [name,delta] of [['slide',250],['entered',250],['pause',999],['bubble',1],['pop',150],['settled',100],['hold',999],['fade-start',1],['fading',100],['prelaunch',99],['start',1],['depart',250],['departed',250],['rising',100],['contact',600],['push',1000],['exit',999]]) {
                     const result=await page.evaluate(({delta,name}) => {
                         const b=s.wojak;
                         if(b.update(delta)) throw Error('premature completion');
-                        if(name==='hold' && (ship.y!==startY || b.godCandle)) throw Error('hold');
+                        const t=b.completionElapsed;
+                        if(t<2950 && (ship.y!==startY || b.godCandle)) throw Error('premature candle');
+                        if(t<3450) {
+                            const c=b.pumpCharacter,p=b.pumpBubble;
+                            if(!c || c.body || c.flipX) throw Error('character sprite');
+                            const oldScale=Math.min(800*0.48/c.width,600*0.48/c.height);
+                            if(Math.abs(c.scaleX-oldScale*0.5)>1e-6 || c.scaleX!==c.scaleY) throw Error('character half size');
+                            if(Math.abs(c.getBounds().left-16)>1e-6) throw Error('bottom-left anchor');
+                            const finalY=600-c.height*c.scaleY*0.86;
+                            if(t>=500 && t<=2950 && Math.abs(c.y-finalY)>1e-6) throw Error('stationary pause');
+                            if(t===3200 && Math.abs(c.y-(finalY+600)/2)>1e-6) throw Error('downward exit');
+                            if(t<2950) {
+                                if(!p || p.body || p.flipX || p.visible!==(t>=1500)) throw Error('bubble timing');
+                                if(p.scaleX!==p.scaleY || c.depth<=b.percentage.depth || p.depth<=c.depth) throw Error('pump rendering');
+                                if(t>=1750 && Math.abs(p.scaleX-Math.min(800*0.34/p.width,600*0.3/p.height)*0.5)>1e-6) throw Error('bubble half size');
+                                const alpha=t<=2750?1:1-(t-2750)/200;
+                                if(Math.abs(p.alpha-alpha)>1e-6) throw Error('bubble fade');
+                            } else if(p) throw Error('bubble present at candle launch');
+                        }
+                        if(t>=3450 && (b.pumpCharacter || b.pumpBubble)) throw Error('pump cleanup');
                         if(b.godCandle){
                             const c=b.godCandle, top=c.y+134*c.scaleY;
                             const body=b.godCandleBody;
@@ -116,6 +135,7 @@ async function serve(route) {
                             if(Math.abs(c.x-(g.left+g.right)/2)>1e-6) throw Error('centering');
                             if(['contact','push','exit'].includes(name) && Math.abs(top-b.weaponGeometry().candles.y)>1e-6) throw Error('contact lost');
                             if(name==='push' && ship.y>=startY) throw Error('no push');
+                            if(name==='push' && Math.abs(ship.y-(startY+b.defeatExitY)/2)>1e-6) throw Error('half-speed push');
                         }
                         testGame.renderer.preRender(); s.sys.render(testGame.renderer); testGame.renderer.postRender();
                         return {name, y:ship.y};
@@ -127,13 +147,50 @@ async function serve(route) {
                     if(!b.update(1) || b.sprite || candle.active || body.active || ship.getBounds().bottom>=0) throw Error('exit cleanup');
                     if(b.update(10000)) throw Error('duplicate completion');
                     // Reset while a candle is active must destroy it immediately.
-                    b.start(); b.update(1500); for(let i=0;i<150;i++)b.hit(); b.update(2000);
+                    b.start(); b.update(1500); for(let i=0;i<150;i++)b.hit(); b.update(4000);
                     const cancelled=b.godCandle, cancelledBody=b.godCandleBody; s.restart();
                     if(cancelled.active || cancelledBody.active || b.godCandleBody || b.godCandle || b.sprite || s.wave!==1) throw Error('restart cleanup');
                 });
             }
         }
+        for (const [width,height] of [[480,800],[1280,720]]) {
+            await page.setViewportSize({width,height});
+            await page.evaluate(({width,height}) => {
+                testGame.scale.resize(width,height);
+                s.cameras.main.setSize(width,height);
+                s.physics.world.setBounds(0,0,width,height);
+            },{width,height});
+            for (const ms of [500,1499,1500,1650,1750,2749,2850,3200]) {
+                await page.evaluate(({ms,width,height}) => {
+                    s.restart(); s._startWojak();
+                    const b=s.wojak;b.update(1500);b.sprite.x=[205,400,595][ms%3];for(let i=0;i<150;i++)b.hit();b.update(ms);
+                    const c=b.pumpCharacter,p=b.pumpBubble;
+                    if(p) {
+                        const box=p.getBounds();
+                        if(box.left<0 || box.right>width || box.top<0 || box.bottom>height) throw Error('viewport bubble bounds');
+                        if(p.scaleX!==p.scaleY) throw Error('bubble aspect');
+                    }
+                    if(Math.abs(c.getBounds().left-width*0.02)>1e-6) throw Error('viewport left margin');
+                    if(c.getBounds().bottom<=height || c.y>=height) throw Error('viewport torso crop');
+                    if(c.scaleX!==c.scaleY) throw Error('viewport aspect');
+                    if(!s.textures.exists('wojak-bogdanoff') || !s.textures.exists('wojak-pump-it')) throw Error('missing pump textures');
+                    testGame.renderer.preRender();s.sys.render(testGame.renderer);testGame.renderer.postRender();
+                },{ms,width,height});
+                await page.locator('canvas').screenshot({path:path.join(output,`viewport-${width}x${height}-${ms}.png`)});
+            }
+        }
+        await page.evaluate(() => {
+            for(const action of ['restart','_gameOver']) for(const ms of [0,250,500,1499,1500,1650,1750,2749,2850,2950,3200,3450,4150,5150,6149]) {
+                s.restart();s._startWojak();
+                const b=s.wojak;b.update(1500);for(let i=0;i<150;i++)b.hit();
+                const c=b.pumpCharacter,p=b.pumpBubble;b.update(ms);
+                const candle=b.godCandle;s[action]();
+                if(c.active || p.active || (candle && candle.active) || b.pumpCharacter || b.pumpBubble || b.sprite) throw Error(action+' pump cleanup '+ms);
+                b.update(10000);
+                if(b.pumpCharacter || b.pumpBubble || b.godCandle) throw Error('stale animation');
+            }
+        });
         assert.deepEqual(errors,[]);
-        console.log('PASS: actual Phaser Canvas/WebGL, both orientations, 56 screenshots, three 100ms ON/OFF pulses at all four thresholds, continued patrol/combat, REKT hold, half-width proportional PNG, contact/push, full exit, one-shot completion, restart during push; no browser errors.');
+        console.log('PASS: Phaser Canvas/WebGL, both orientations and opposite ship positions, combat/threshold regressions, bottom-left half-size PUMP IT, full entrance/pause/pop/hold/fade/downward exit timeline, 2950ms candle launch, unchanged candle width, half-speed rise/push, synchronized contact and exit, 480x800 and 1280x720 overlays, restart/death at fifteen stages, one-shot completion; no browser errors.');
     } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

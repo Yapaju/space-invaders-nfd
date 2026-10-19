@@ -22,9 +22,8 @@ export const WojakSettings = {
     hoverAmplitude: 7,
     hoverFrequency: 0.5,
     entranceDuration: 1500,
-    completionDuration: 1000,
-    godCandleRiseDuration: 600,
-    godCandlePushDuration: 1000,
+    godCandleRiseDuration: 1200,
+    godCandlePushDuration: 2000,
     godCandleSizeMultiplier: 0.5,
     prototypeEndPortfolio: -99.9,
     poseThreshold: 25,
@@ -36,6 +35,26 @@ export const WojakSettings = {
     milestoneFlashTint: 0xff7777,
     hitboxWidth: 270,
     hitboxHeight: 82
+};
+
+// Relative to REKT; the existing candle rise/push durations stay independent.
+export const WojakPumpSettings = {
+    entranceDuration: 500,
+    dramaticPauseDuration: 1000,
+    bubblePopDuration: 250,
+    commandHoldDuration: 1000,
+    bubbleFadeDuration: 200,
+    exitDuration: 500,
+    characterScale: 0.5,
+    bubbleScale: 0.5,
+    leftMargin: 0.02,
+    characterWidth: 0.48,
+    characterMaxHeight: 0.48,
+    visibleTorso: 0.86,
+    bubbleWidth: 0.34,
+    bubbleOffsetX: 0.16,
+    bubbleBottomOffset: -0.04,
+    depth: 100
 };
 
 // All positions below are source pixels on the 1536 x 1024 artwork canvas.
@@ -123,6 +142,8 @@ export const WojakVisualSettings = {
 };
 
 export const WojakAssets = [
+    { asset: AssetType.WojakPumpCharacter, path: 'mini-boss/wojak/wojak-bogdanoff.png' },
+    { asset: AssetType.WojakPumpBubble, path: 'mini-boss/wojak/wojak-pump-it.png' },
     { asset: AssetType.WojakGodCandle, path: 'mini-boss/wojak/wojak-god-candle.png' },
     { asset: AssetType.WojakShipRight, path: 'mini-boss/wojak/wojak-boss-spaceship-right.png' },
     { asset: AssetType.WojakShipLeft, path: 'mini-boss/wojak/wojak-boss-spaceship-left.png' },
@@ -173,6 +194,8 @@ export class WojakBoss {
     private candleContactY = 0;
     private defeatExitY = 0;
     private candleScale = 1;
+    private pumpCharacter: Phaser.GameObjects.Image;
+    private pumpBubble: Phaser.GameObjects.Image;
 
     constructor(private scene: Phaser.Scene) {
         this.candles = new WojakCandles(scene);
@@ -307,10 +330,75 @@ export class WojakBoss {
         this.updateFlash(WojakSettings.milestoneFlashDuration);
         this.updatePercentage();
         this.syncLayers();
+        this.beginPump();
+    }
+
+    private beginPump() {
+        this.pumpCharacter = this.scene.add.image(0, 0, AssetType.WojakPumpCharacter)
+            .setOrigin(0.5, 0).setDepth(WojakPumpSettings.depth);
+        this.pumpBubble = this.scene.add.image(0, 0, AssetType.WojakPumpBubble)
+            .setDepth(WojakPumpSettings.depth + 1).setVisible(false);
+        this.updatePump();
+    }
+
+    private clearPump() {
+        if (this.pumpCharacter) this.pumpCharacter.destroy();
+        if (this.pumpBubble) this.pumpBubble.destroy();
+        this.pumpCharacter = this.pumpBubble = undefined;
+    }
+
+    private get pumpLaunchAt() {
+        const settings = WojakPumpSettings;
+        return settings.entranceDuration + settings.dramaticPauseDuration +
+            settings.bubblePopDuration + settings.commandHoldDuration + settings.bubbleFadeDuration;
+    }
+
+    // Pure elapsed-time animation: no timers/tweens can outlive the encounter.
+    private updatePump() {
+        if (!this.pumpCharacter) return;
+        const settings = WojakPumpSettings;
+        const elapsed = this.completionElapsed;
+        const bubbleAt = settings.entranceDuration + settings.dramaticPauseDuration;
+        const fadeAt = bubbleAt + settings.bubblePopDuration + settings.commandHoldDuration;
+        const exit = Math.max(0, Math.min(1, (elapsed - this.pumpLaunchAt) / settings.exitDuration));
+        if (exit === 1) { this.clearPump(); return; }
+        const bounds = this.scene.physics.world.bounds;
+        const width = bounds.right - bounds.left, height = bounds.bottom - bounds.top;
+        const character = this.pumpCharacter, bubble = this.pumpBubble;
+        const scale = Math.min(width * settings.characterWidth / character.width,
+            height * settings.characterMaxHeight / character.height) * settings.characterScale;
+        const finalY = bounds.bottom - character.height * scale * settings.visibleTorso;
+        const entrance = Math.min(1, elapsed / settings.entranceDuration);
+        const ease = 1 - Math.pow(1 - entrance, 3);
+        const exitEase = exit * exit * (3 - 2 * exit);
+        character.setScale(scale).setPosition(bounds.left + width * settings.leftMargin + character.width * scale / 2,
+            bounds.bottom + (finalY - bounds.bottom) * ease + (bounds.bottom - finalY) * exitEase);
+        // Destroy the bubble before launching the candle; the character exits independently.
+        if (elapsed >= this.pumpLaunchAt) {
+            if (bubble) bubble.destroy();
+            this.pumpBubble = undefined;
+            return;
+        }
+        const pop = Math.max(0, Math.min(1,
+            (elapsed - bubbleAt) / settings.bubblePopDuration));
+        const popScale = pop < 0.6 ? 0.7 + 0.4 * Math.sin(pop / 0.6 * Math.PI / 2) :
+            1 + 0.1 * Math.cos((pop - 0.6) / 0.4 * Math.PI / 2);
+        const bubbleScale = Math.min(width * settings.bubbleWidth / bubble.width,
+            height * 0.3 / bubble.height) * settings.bubbleScale;
+        const halfWidth = bubble.width * bubbleScale * 1.1 / 2;
+        const halfHeight = bubble.height * bubbleScale * 1.1 / 2;
+        const x = Math.max(bounds.left + halfWidth, Math.min(bounds.right - halfWidth,
+            character.x + character.width * scale * settings.bubbleOffsetX));
+        const y = Math.max(bounds.top + halfHeight, Math.min(bounds.bottom - halfHeight,
+            finalY + character.height * scale * settings.bubbleBottomOffset - halfHeight));
+        const fade = Math.max(0, Math.min(1, (elapsed - fadeAt) / settings.bubbleFadeDuration));
+        bubble.setVisible(elapsed >= bubbleAt).setScale(bubbleScale * popScale)
+            .setPosition(x, y).setAlpha(1 - fade);
     }
 
     private updateDefeat(): boolean {
-        const elapsed = this.completionElapsed - WojakSettings.completionDuration;
+        this.updatePump();
+        const elapsed = this.completionElapsed - this.pumpLaunchAt;
         if (elapsed < 0) return false;
         const bounds = this.scene.physics.world.bounds;
         if (!this.godCandle) {
@@ -463,6 +551,7 @@ export class WojakBoss {
     }
 
     private remove() {
+        this.clearPump();
         if (this.godCandle) this.godCandle.destroy();
         if (this.godCandleBody) this.godCandleBody.destroy();
         this.godCandle = undefined;

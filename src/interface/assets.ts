@@ -10,6 +10,8 @@ export enum AssetType {
     WojakCandle5 = "wojak-red-candle-5",
     WojakTear = "wojak-tear",
     WojakGodCandle = "wojak-god-candle",
+    WojakPumpCharacter = "wojak-bogdanoff",
+    WojakPumpBubble = "wojak-pump-it",
     WojakShipRight = "wojak-boss-spaceship-right",
     WojakShipLeft = "wojak-boss-spaceship-left",
     WojakCharacterRight = "wojak-boss-50-right",
