@@ -369,7 +369,9 @@ const projectedArt = draw => {
 for (const draw of actualPoseDraws.values()) {
     const art = projectedArt(draw);
     const margin = 600 - art.bottom;
-    assert(margin >= 20 && margin <= 25, `visible DOGE bottom margin ${margin}`);
+    // The wider Gundam art leaves slightly more vertical padding in the same frame.
+    assert(margin >= 20 && margin <= 30, `visible Gundam DOGE bottom margin ${margin}`);
+    nearSkin(draw[7] / draw[8], draw[3] / draw[4]);
     assert(art.top >= 0 && art.bottom <= 600);
 }
 for (const outsideX of [-100, 900]) {

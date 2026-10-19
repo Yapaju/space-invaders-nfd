@@ -15,7 +15,7 @@ export const PlayerVisualScale = 1.4;
 export const MemeSkins: { Player: SkinDefinition; Invader: SkinDefinition } = {
     Player: {
         asset: AssetType.Ship,
-        path: 'meme-skins/doge-player.png',
+        path: 'meme-skins/player/gundam-purple-player.png',
         displayWidth: 52 * PlayerVisualScale,
         originX: 190 / 335, originY: 0.45,
         hitbox: { x: 100, y: 42, width: 180, height: 195 }
@@ -33,18 +33,19 @@ export const MemeSkins: { Player: SkinDefinition; Invader: SkinDefinition } = {
 export const PlayerCanvas = { width: 335, height: 320 };
 
 export const PlayerPoses = [
-    { asset: AssetType.Ship, path: 'meme-skins/doge-player.png' },
+    { asset: AssetType.Ship, path: 'meme-skins/player/gundam-purple-player.png' },
     {
-        asset: AssetType.ShipLeft, path: 'meme-skins/doge-player-left.png'
+        asset: AssetType.ShipLeft, path: 'meme-skins/player/gundam-purple-player-left.png'
     },
     {
-        asset: AssetType.ShipRight, path: 'meme-skins/doge-player-right.png'
+        asset: AssetType.ShipRight, path: 'meme-skins/player/gundam-purple-player-right.png'
+    },
+    // Reuse the movement art during the existing brief reversal state.
+    {
+        asset: AssetType.ShipTurnLeft, path: 'meme-skins/player/gundam-purple-player-left.png'
     },
     {
-        asset: AssetType.ShipTurnLeft, path: 'meme-skins/doge-player-turn-left.png'
-    },
-    {
-        asset: AssetType.ShipTurnRight, path: 'meme-skins/doge-player-turn-right.png'
+        asset: AssetType.ShipTurnRight, path: 'meme-skins/player/gundam-purple-player-right.png'
     }
 ];
 
