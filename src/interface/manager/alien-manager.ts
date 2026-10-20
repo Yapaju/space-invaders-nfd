@@ -1,11 +1,11 @@
 import { Alien } from "../alien";
-import { getWaveConfiguration, FORMATION_COLUMNS, FORMATION_ROWS, INVADERS_PER_WAVE } from "../wave-config";
+import { getWaveConfiguration, FORMATION_COLUMNS, FORMATION_ROWS, INVADERS_PER_WAVE, FORMATION_START_Y, FORMATION_ROW_SPACING } from "../wave-config";
 
 export class AlienManager {
     aliens: Phaser.Physics.Arcade.Group;
     // Minimum whole-pixel spacing for the enlarged 87.36 x 73.10px frames.
     readonly columnSpacing = 88;
-    readonly rowSpacing = 74;
+    readonly rowSpacing = FORMATION_ROW_SPACING;
     readonly descentStep = 25;
     descentCount = 0;
     onDescent: (count: number) => void;
@@ -106,7 +106,7 @@ export class AlienManager {
     private _sortAliens(wave = 1) {
         const bounds = this._scene.physics.world.bounds;
         const ORIGIN_X = (bounds.left + bounds.right) / 2 - (FORMATION_COLUMNS - 1) * this.columnSpacing / 2;
-        let ORIGIN_Y = 100;
+        const ORIGIN_Y = FORMATION_START_Y;
         const config = getWaveConfiguration(wave);
         this.aliens.clear(true, true);
         for (let y = 0; y < FORMATION_ROWS; y++) {

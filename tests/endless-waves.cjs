@@ -83,7 +83,7 @@ const Phaser = {
     Animations: { Events: { ANIMATION_COMPLETE: 'animationcomplete' } },
     Scene: class {},
     Physics: { Arcade: { Sprite } },
-    Math: { RND: { integerInRange: (min, max) => max } }
+    Math: { RND: { integerInRange: (min, max) => max, frac: () => 0.1, realInRange: min => min } }
 };
 const cache = new Map();
 function load(relative) {
@@ -116,7 +116,13 @@ const { MemeSkins, PlayerPoses, PlayerCanvas, visibleImageBounds, preparePlayerP
 const { Ship } = load('src/interface/ship.ts');
 const { EnemyType } = load('src/interface/enemy-type.ts');
 const { getWaveConfiguration, FORMATION_COLUMNS, FORMATION_ROWS, INVADERS_PER_WAVE } = load('src/interface/wave-config.ts');
-const { PonkePoses, prepareEnemySkins } = load('src/interface/enemy-skins.ts');
+const { PonkePoses, PopcatPoses, InvaderCanvas, prepareEnemySkins } = load('src/interface/enemy-skins.ts');
+const { PopcatSettings } = load('src/interface/popcat-lights.ts');
+const { PopcornSettings, PopcornAssets, PopcornProjectile, firePopcatAttack, popcatMouthPosition } = load('src/interface/popcat-weapons.ts');
+const expectedWaveType = wave => [EnemyType.Popcat, EnemyType.Pepe, EnemyType.Ponke][(wave - 1) % 3];
+const expectedEnemyTexture = (type, left = false) => type === EnemyType.Popcat ?
+    `popcat-${left ? 'left' : 'right'}` : type === EnemyType.Ponke ?
+    `ponke-${left ? 'left' : 'right'}` : 'alien';
 const { BananaBombs, BananaSettings, bananaTrajectory } = load('src/interface/banana-bomb.ts');
 const { Kaboom } = load('src/interface/kaboom.ts');
 const { AnimationFactory } = load('src/interface/factory/animation-factory.ts');
@@ -148,6 +154,8 @@ preloadScene.load = {
     audio() {}
 };
 preloadScene.preload();
+PopcornAssets.forEach(pose => assert(textureRequests.some(request =>
+    request.asset === `${pose.asset}-source` && request.url === pose.path)));
 WojakAssets.forEach(pose => assert(textureRequests.some(request => request.asset === pose.asset && request.url === pose.path)));
 for (const direction of ['left', 'right']) {
     assert(textureRequests.some(request => request.asset === `elon-ally-${direction}` &&
@@ -267,7 +275,7 @@ for (const pose of PlayerPoses) {
 // Both original PONKE PNGs load and fit the existing PEPE-sized frame unchanged.
 const ponkeImages = new Map();
 const ponkeTextures = new Map();
-for (const pose of PonkePoses) {
+for (const pose of PonkePoses.concat(PopcatPoses)) {
     assert(textureRequests.some(request => request.asset === `${pose.asset}-source` && request.url === pose.path));
     const png = fs.readFileSync(path.resolve(__dirname, '../assets', pose.path));
     assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
@@ -276,10 +284,12 @@ for (const pose of PonkePoses) {
 const enemySkinScene = { textures: {
     getFrame(key) { assert.equal(key, 'alien'); return { width: 337, height: 282 }; },
     exists: key => ponkeImages.has(key) || ponkeTextures.has(key),
-    get: key => ({ getSourceImage: () => ponkeImages.get(key) }),
+    get: key => ({ getSourceImage: () => ponkeImages.get(key) || ponkeTextures.get(key) }),
     createCanvas(key, width, height) {
         const texture = { width, height, draws: [], refreshes: 0,
-            context: { drawImage(...args) { texture.draws.push(args); } },
+            context: { drawImage(...args) { texture.draws.push(args); },
+                getImageData() { return { data: new Uint8ClampedArray(width * height * 4) }; },
+                putImageData() {} },
             refresh() { texture.refreshes++; }
         };
         ponkeTextures.set(key, texture);
@@ -288,8 +298,8 @@ const enemySkinScene = { textures: {
 } };
 prepareEnemySkins(enemySkinScene);
 prepareEnemySkins(enemySkinScene);
-assert.equal(ponkeTextures.size, 2);
-for (const pose of PonkePoses) {
+assert.equal(ponkeTextures.size, 6);
+for (const pose of PonkePoses.concat(PopcatPoses)) {
     const texture = ponkeTextures.get(pose.asset);
     assert.equal(texture.width, 337); assert.equal(texture.height, 282);
     assert.equal(texture.draws.length, 1); assert.equal(texture.refreshes, 1);
@@ -303,7 +313,7 @@ for (const pose of PonkePoses) {
 for (const wave of [1, 2, 3, 4, 5, 6, 7, 8, 99, 100, 999, 1000]) {
     const config = getWaveConfiguration(wave);
     assert.equal(config.enemies.length, 24);
-    assert(config.enemies.every(type => type === (wave % 2 ? EnemyType.Ponke : EnemyType.Pepe)));
+    assert(config.enemies.every(type => type === expectedWaveType(wave)));
 }
 
 // Use the installed Phaser Body to verify scaled offsets and no post-update drift.
@@ -790,7 +800,7 @@ const assertInside = () => survivors().forEach(alien => {
     near(alien.collisionY, alien.y);
 });
 assert.equal(survivors().length, 24);
-assert(survivors().every(alien => alien.enemyType === EnemyType.Ponke && alien.texture.key === 'ponke-right'));
+assert(survivors().every(alien => alien.enemyType === EnemyType.Popcat && alien.texture.key === 'popcat-right'));
 assert.equal(FORMATION_COLUMNS, 6); assert.equal(FORMATION_ROWS, 4);
 assert.equal(INVADERS_PER_WAVE, 24); assert.equal(formation.aliens.maxSize, 24);
 assert.equal(formation.columnSpacing, 88);
@@ -837,7 +847,7 @@ assertInside();
 // Reach the right edge using the current skin's visual bounds.
 const rightTravel = 800 - fullFormationBounds.right;
 formation.update((rightTravel - 100) * 10, 10000);
-assert(survivors().every(alien => alien.texture.key === 'ponke-left'), 'switch at the right edge immediately');
+assert(survivors().every(alien => alien.texture.key === 'popcat-left'), 'switch at the right edge immediately');
 survivors().forEach((alien, i) => {
     near(alien.x, originalPositions[i][0] + rightTravel);
     near(alien.y, originalPositions[i][1] + descent);
@@ -887,7 +897,7 @@ near(lone.x, 800 - halfWidth); near(lone.y, 100 + descent);
 // Step infinitesimally past arrival to avoid decimal round-off stopping a
 // synthetic frame just short of the boundary; movement assertions allow 1e-7px.
 formation.update((800 - halfWidth * 2) * 10 / 1.5 + 1e-8, 10000);
-assert.equal(lone.texture.key, 'ponke-right', 'switch at the left edge immediately');
+assert.equal(lone.texture.key, 'popcat-right', 'switch at the left edge immediately');
 near(lone.x, halfWidth); near(lone.y, 100 + descent * 2);
 assert.equal(formation.direction, 1);
 formation.update(10, 10000);
@@ -896,15 +906,15 @@ assertInside();
 // Resetting from leftward movement starts the next configured wave facing right.
 for (const wave of [2, 3, 4, 5, 99, 100]) {
     formation.reset(wave);
-    const expectedType = wave % 2 ? EnemyType.Ponke : EnemyType.Pepe;
-    const expectedTexture = wave % 2 ? 'ponke-right' : 'alien';
+    const expectedType = expectedWaveType(wave);
+    const expectedTexture = expectedEnemyTexture(expectedType);
     assert.equal(survivors().length, 24);
     assert(survivors().every(alien => alien.enemyType === expectedType && alien.texture.key === expectedTexture));
     assertFormationFits();
     near((initialBounds().left + initialBounds().right) / 2, 400);
     formation.update(rightTravel / formation.speed * 1000 + 1e-8, 10000);
     assert.equal(formation.direction, -1);
-    assert(survivors().every(alien => alien.texture.key === (wave % 2 ? 'ponke-left' : 'alien')));
+    assert(survivors().every(alien => alien.texture.key === expectedEnemyTexture(expectedType, true)));
     near(initialBounds().right, 800);
     assertFormationFits();
     const fullSweep = 800 - (fullFormationBounds.right - fullFormationBounds.left);
@@ -919,7 +929,7 @@ for (const wave of [2, 3, 4, 5, 99, 100]) {
 const typedAlien = new Alien({}, 250, 200);
 typedAlien.angle = 0;
 typedAlien.body = new ArcadeBody({ defaults: {}, bounds: {} }, typedAlien);
-for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
+for (const type of [EnemyType.Popcat, EnemyType.Ponke, EnemyType.Pepe]) {
     typedAlien.configure(type, 1);
     near(typedAlien.body.width, 247 * 67.2 * 1.30 / 337);
     near(typedAlien.body.height, 210 * 67.2 * 1.30 / 337);
@@ -932,7 +942,7 @@ for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
     const before = geometry();
     const changes = typedAlien.textureChanges;
     typedAlien.setDirection(-1);
-    assert.equal(typedAlien.texture.key, type === EnemyType.Ponke ? 'ponke-left' : 'alien');
+    assert.equal(typedAlien.texture.key, expectedEnemyTexture(type, true));
     assert.deepEqual(geometry(), before);
     if (type === EnemyType.Pepe) assert.equal(typedAlien.textureChanges, changes);
     const afterSwitch = typedAlien.textureChanges;
@@ -940,10 +950,10 @@ for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
     assert.equal(typedAlien.textureChanges, afterSwitch);
     typedAlien.setDirection(1);
     assert.deepEqual(geometry(), before);
-    assert.equal(typedAlien.texture.key, type === EnemyType.Ponke ? 'ponke-right' : 'alien');
+    assert.equal(typedAlien.texture.key, expectedEnemyTexture(type));
 }
 // Enemy-specific selection preserves PEPE's original aiming, speed and cooldown.
-for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
+for (const type of [EnemyType.Popcat, EnemyType.Ponke, EnemyType.Pepe]) {
     typedAlien.configure(type, 1);
     const attackScene = new MainScene();
     attackScene.state = GameState.Playing;
@@ -952,12 +962,23 @@ for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
     attackScene.alienManager = { getRandomAliveEnemy: () => typedAlien };
     const projectile = new EnemyBullet(attackScene);
     let redShots = 0, bananaLaunch;
-    attackScene.assetManager = { enemyBullets: { get: () => { redShots++; return projectile; } } };
+    const cornShots = [];
+    attackScene.add = { existing(shot) {
+        shot.width = shot.height = 128;
+        shot.body = new ArcadeBody({ defaults: {}, bounds: {} }, shot);
+    } };
+    attackScene.assetManager = { enemyBullets: { get: () => { redShots++; return projectile; },
+        add: shot => cornShots.push(shot) } };
     attackScene.bananaBombs = { launch(...args) { bananaLaunch = args; } };
     let aim;
-    attackScene.physics = { moveToObject(bullet, target, speed) { aim = { bullet, target, speed }; } };
+    attackScene.physics = { world: { bounds: {left:0,right:800,top:0,bottom:600} }, moveToObject(bullet, target, speed) { aim = { bullet, target, speed }; } };
     attackScene._enemyFires();
-    if (type === EnemyType.Ponke) {
+    if (type === EnemyType.Popcat) {
+        assert.equal(redShots, 0); assert.equal(bananaLaunch, undefined); assert.equal(aim, undefined);
+        assert.equal(cornShots.length, 5);
+        cornShots.forEach(shot => { near(shot.body.width, 12); near(shot.displayWidth || shot.width * shot.scaleX, 18); });
+        assert.equal(typedAlien.texture.key, 'popcat-open-right');
+    } else if (type === EnemyType.Ponke) {
         assert.deepEqual(bananaLaunch, [typedAlien.x, typedAlien.y, 400, 500]);
         assert.equal(redShots, 0); assert.equal(aim, undefined);
     } else {
@@ -969,6 +990,90 @@ for (const type of [EnemyType.Ponke, EnemyType.Pepe]) {
     }
     assert.equal(attackScene.firingTimer, 5000);
 }
+// Per-invader mouth deadlines, static lights, reversal during a POP,
+// exact close boundary, and no callbacks/visual children left after removal.
+const popcats = [new Alien({}, 100, 100), new Alien({}, 200, 100)];
+popcats.forEach(alien => alien.configure(EnemyType.Popcat, 1));
+popcats[0].pop();
+popcats.forEach(alien => alien.preUpdate(100, 100));
+assert(popcats[0].texture.key.startsWith('popcat-open-right'));
+assert(popcats[1].texture.key.startsWith('popcat-right'));
+popcats[0].setDirection(-1); popcats[1].pop();
+assert(popcats[0].texture.key.startsWith('popcat-open-left'));
+popcats.forEach(alien => alien.preUpdate(179, 79));
+assert(popcats[0].texture.key.startsWith('popcat-open-left'));
+popcats.forEach(alien => alien.preUpdate(180, 1));
+assert(popcats[0].texture.key.startsWith('popcat-left'));
+assert(popcats[1].texture.key.startsWith('popcat-open-right'));
+popcats[1].preUpdate(280, 100);
+assert(popcats[1].texture.key.startsWith('popcat-right'));
+popcats[0].preUpdate(1200, 1020);
+assert.equal(popcats[0].texture.key, 'popcat-left');
+popcats[0].kill(); popcats[0].pop(); popcats[0].preUpdate(1300, 100);
+assert.equal(popcats[0].texture.key, 'popcat-left');
+const blinking = new Alien({}, 100, 100); blinking.configure(EnemyType.Popcat, 1);
+blinking.preUpdate(299,299); assert.equal(blinking.texture.key,'popcat-right');
+blinking.preUpdate(300,1); assert.equal(blinking.texture.key,'popcat-right');
+blinking.pop(); blinking.setDirection(-1);
+assert.equal(blinking.texture.key,'popcat-open-left');
+blinking.preUpdate(599,299); assert.equal(blinking.texture.key,'popcat-left');
+blinking.preUpdate(600,1); assert.equal(blinking.texture.key,'popcat-left');
+console.log('PASS: Popcat independent 180ms mouth poses, directional changes, static PNG lights, inactive cleanup and five-shot attacks.');
+
+// Deterministic probability boundaries, fan trajectories, mouth registration,
+// descending reference line, one-time transform, fair warning and off-screen cleanup.
+{
+    const shots = [], scene = { physics: { world: { bounds: { left: 0, right: 800, top: 0, bottom: 600 } } },
+        add: { existing(shot) { shot.width = shot.height = 128;
+            shot.body = new ArcadeBody({ defaults: {}, bounds: {} }, shot); } } };
+    const group = { add(shot) { shots.push(shot); } };
+    const shooter = new Alien({}, 400, 200); shooter.configure(EnemyType.Popcat, 1); shooter.pop();
+    const player = { x: 350, y: 550 };
+    const origin = popcatMouthPosition(shooter);
+    let draws = [0.799999, 0.1, 0.9, 0.1, 0.9, 0.1];
+    Phaser.Math.RND.frac = () => draws.shift();
+    firePopcatAttack(scene, group, shooter, player);
+    assert.equal(shots.length, 5);
+    assert.deepEqual(shots.map(v => v.texture.key), ['popcat-popcorn','popcat-popcorn-2','popcat-popcorn','popcat-popcorn-2','popcat-popcorn']);
+    shots.forEach((shot, i) => {
+        near(shot.x, origin.x); near(shot.y, origin.y);
+        near(shot.velocityX, PopcornSettings.fanVelocities[i]);
+        near(shot.velocityY, -220);
+        near(shot.body.acceleration.y, 620);
+        assert(shot.body.isCircle); near(shot.body.width, 12);
+    });
+    shots.length = 0; Phaser.Math.RND.frac = () => 0.8;
+    firePopcatAttack(scene, group, shooter, player);
+    assert.equal(shots.length, 1);
+    const kernel = shots[0];
+    near(kernel.velocityX, 48); near(kernel.velocityY, -220);
+    assert.equal(kernel.damage,1);
+    near(kernel.body.width, 6); assert.equal(kernel.texture.key, 'popcat-popcorn-kernel');
+    player.x = 750; const velocity = [kernel.velocityX,kernel.velocityY];
+    // Position alone cannot transform an ascending kernel, including low emitters.
+    kernel.body.velocity.y=-10; kernel.y=350; kernel.preUpdate(100,100);
+    assert.equal(kernel.texture.key,'popcat-popcorn-kernel');
+    kernel.body.velocity.y=100; kernel.y=321.99; kernel.preUpdate(110,10);
+    assert.equal(kernel.texture.key,'popcat-popcorn-kernel');
+    kernel.y=322; kernel.preUpdate(1100,1000);
+    assert.equal(kernel.texture.key, 'popcat-popcorn-giant');
+    assert.equal(kernel.damage,2);
+    near(kernel.width*kernel.scaleX,18); near(kernel.growthElapsed,0);
+    kernel.body.preUpdate(false,0); near(kernel.body.width,6);
+    const changes=kernel.textureChanges;
+    kernel.preUpdate(1239,139); kernel.body.preUpdate(false,0); near(kernel.body.width,6);
+    kernel.preUpdate(1240,1); kernel.body.preUpdate(false,0); near(kernel.width*kernel.scaleX,83.2); near(kernel.body.width,6);
+    kernel.preUpdate(1279,39); kernel.body.preUpdate(false,0); near(kernel.body.width,6);
+    kernel.preUpdate(1280,1); kernel.body.preUpdate(false,0); near(kernel.body.width,62.4);
+    kernel.preUpdate(3280,2000); assert.equal(kernel.textureChanges,changes);
+    assert.deepEqual([kernel.velocityX,kernel.velocityY],velocity);
+    for(const [x,y] of [[-100,200],[900,200],[400,-100],[400,700]]) {
+        const shot = new PopcornProjectile(scene); scene.add.existing(shot);
+        shot.launch(x,y,0,135,PopcornAssets[0].asset); shot.update(); assert(shot.destroyed);
+    }
+    Phaser.Math.RND.frac = () => 0.1;
+}
+console.log('PASS: Popcorn exact 80/20 boundary, five-shot fan/two variants, one kernel, mirrored launch, descending Y=322 transform once, 140ms growth/180ms warning, 12/6/62.4px bodies and four-edge cleanup.');
 // Frame splitting does not change the result, even when crossing several edges.
 formation.reset(1000);
 const expectedReversals = 1 + Math.floor((formation.speed * 10 - rightTravel) /
@@ -2829,7 +2934,7 @@ for (let nextWave = 3; nextWave <= 11; nextWave++) {
     assert.equal(encounter.wojak.sprite, undefined);
     assert.equal(wojakSprites.length, spritesAfterEncounter, 'no second boss, including the old Wave 10 trigger');
     assert.equal(encounterInvaders.length, 24);
-    assert(encounterInvaders.every(type => type === (nextWave % 2 ? EnemyType.Ponke : EnemyType.Pepe)));
+    assert(encounterInvaders.every(type => type === expectedWaveType(nextWave)));
 }
 assert.deepEqual(encounterWaves, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 for (const phase of [WojakPhase.Entrance, WojakPhase.Patrol, WojakPhase.Complete]) {

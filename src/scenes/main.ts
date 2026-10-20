@@ -10,7 +10,7 @@ import { EnemyBullet } from "../interface/enemy-bullet";
 import { ScoreManager } from "../interface/manager/score-manager";
 import { GameState } from "../interface/game-state";
 import { MemeSkins, SkinDefinition, PlayerPoses, preparePlayerPoses } from "../interface/skins";
-import { PonkePoses, prepareEnemySkins } from "../interface/enemy-skins";
+import { PonkePoses, PopcatPoses, prepareEnemySkins } from "../interface/enemy-skins";
 import { EnemyType } from "../interface/enemy-type";
 import { BananaBombs } from "../interface/banana-bomb";
 import { DamageFeedback } from "../interface/damage-feedback";
@@ -20,6 +20,7 @@ import { RapidFire, RapidFireSettings } from "../interface/rapid-fire";
 import { WojakBoss, WojakAssets, WojakSettings, shouldStartWojakTest } from "../interface/wojak-boss";
 import { CandleAssets } from "../interface/wojak-candles";
 import { TearAsset } from "../interface/wojak-tears";
+import { PopcornAssets, PopcornSettings, preparePopcornSkins, firePopcatAttack } from "../interface/popcat-weapons";
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -57,6 +58,7 @@ export class MainScene extends Phaser.Scene {
             frameWidth: ElectricLaserSettings.frameWidth, frameHeight: ElectricLaserSettings.frameHeight
         });
         this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
+        PopcornAssets.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
         WojakAssets.forEach(pose => this.load.image(pose.asset, pose.path));
         CandleAssets.forEach(candle => this.load.image(candle.asset, candle.path));
@@ -75,7 +77,7 @@ export class MainScene extends Phaser.Scene {
             }
         });
         PlayerPoses.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
-        PonkePoses.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
+        PonkePoses.concat(PopcatPoses).forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         this.load.spritesheet(AssetType.Kaboom, "images/explode.png", {
             frameWidth: 128,
             frameHeight: 128,
@@ -94,6 +96,7 @@ export class MainScene extends Phaser.Scene {
     create() {
         preparePlayerPoses(this);
         prepareEnemySkins(this);
+        preparePopcornSkins(this);
         this.state = GameState.Playing;
         this.starfield = this.add
             .tileSprite(0, 0, 800, 600, AssetType.Starfield)
@@ -272,7 +275,7 @@ export class MainScene extends Phaser.Scene {
         }
         enemyBullet.disableBody(true, true);
         this.pendingCleanup.push(() => enemyBullet.destroy());
-        this._damagePlayer();
+        this._damagePlayer(enemyBullet.damage);
     }
 
     private _bulletHitWojak(bullet: Bullet) {
@@ -281,13 +284,17 @@ export class MainScene extends Phaser.Scene {
         this.pendingCleanup.push(() => bullet.destroy());
     }
 
-    private _damagePlayer() {
+    private _damagePlayer(damage = 1) {
         if ((this.state !== GameState.Playing && this.state !== GameState.BossEncounter) || !this.player.active) return;
-        // Icons stay fixed: remove the leftmost active slot.
-        let live: Phaser.GameObjects.Sprite = this.scoreManager.lives.getFirstAlive();
-        if (!live) return;
-        live.setActive(false).setVisible(false);
-        if (this.damageFeedback) this.damageFeedback.show(live);
+        // One accepted hit removes up to its damage in fixed HUD slots. Keep
+        // protection checks above the whole hit and stop at zero remaining lives.
+        if (!this.scoreManager.lives.getFirstAlive()) return;
+        for (let remaining = damage; remaining > 0; remaining--) {
+            const live: Phaser.GameObjects.Sprite = this.scoreManager.lives.getFirstAlive();
+            if (!live) break;
+            live.setActive(false).setVisible(false);
+            if (this.damageFeedback) this.damageFeedback.show(live);
+        }
         this.sound.play(SoundType.Kaboom)
         if (this.scoreManager.noMoreLives) {
             this._gameOver();
@@ -313,6 +320,11 @@ export class MainScene extends Phaser.Scene {
         }
         let randomEnemy = this.alienManager.getRandomAliveEnemy();
         if (!randomEnemy) {
+            return;
+        }
+        if (randomEnemy.enemyType === EnemyType.Popcat) {
+            const fired = firePopcatAttack(this, this.assetManager.enemyBullets, randomEnemy, this.player);
+            this.firingTimer = this.time.now + (fired ? 2000 : PopcornSettings.retryMs);
             return;
         }
         if (randomEnemy.enemyType === EnemyType.Ponke) {

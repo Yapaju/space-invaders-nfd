@@ -1,6 +1,8 @@
 import { AssetType } from "./assets";
 
 export class EnemyBullet extends Phaser.Physics.Arcade.Sprite {
+    get damage(): number { return 1; }
+
     constructor(scene: Phaser.Scene) {
         super(scene, 0, 0, AssetType.EnemyBullet);
     }
