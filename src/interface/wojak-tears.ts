@@ -33,7 +33,7 @@ export class WojakTears {
     constructor(private scene: Phaser.Scene) {}
 
     update(delta: number, portfolio: number, enabled: boolean, emitter: TearEmitter,
-        player: Phaser.Physics.Arcade.Sprite, damage: () => void) {
+        player: Phaser.Physics.Arcade.Sprite, damage: () => void, attackRate = 1) {
         if (!enabled || !player.active) { this.clear(); return; }
         const phase = tearPhase(portfolio);
         if (phase !== this.phase) { this.phase = phase; this.elapsed = 0; }
@@ -60,7 +60,7 @@ export class WojakTears {
         this.flights = this.flights.filter(sprite => sprite.active);
         if (!isFinite(delta) || delta < 0 || delta > TearSettings.maxFrameDelta) return;
         this.elapsed += delta;
-        const interval = phase === 'spread' ? TearSettings.spreadInterval : TearSettings.singleInterval;
+        const interval = (phase === 'spread' ? TearSettings.spreadInterval : TearSettings.singleInterval) / attackRate;
         if (this.elapsed < interval) return;
         this.elapsed = 0;
         const dx = player.x - emitter.x, dy = player.y - emitter.y;

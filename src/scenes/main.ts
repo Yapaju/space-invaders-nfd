@@ -25,6 +25,8 @@ import { PopcornAssets, preparePopcornSkins, firePopcatAttack } from "../interfa
 import { preloadPopcatAudio, installPopcatAudio, stopPopcatSounds } from "../interface/popcat-audio";
 import { AudioBalance, installAudioHeadroom } from '../interface/audio-balance';
 import { WaveDirectorConfig, firingIntervalForWave, isBossMilestone, waveSeedFromSearch } from '../interface/wave-director';
+import { PremiumProgress } from '../interface/premium-spawn';
+import { premiumInvaderOf } from '../interface/premium-invader';
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -42,6 +44,7 @@ export class MainScene extends Phaser.Scene {
     private rapidFire: RapidFire;
     private wojak: WojakBoss;
     private completedBossWave = 0;
+    private premiumProgress = new PremiumProgress();
     private waveSeed = waveSeedFromSearch(typeof location === 'undefined' ? '' : location.search);
     starfield: Phaser.GameObjects.TileSprite;
     player: Phaser.Physics.Arcade.Sprite;
@@ -110,7 +113,7 @@ export class MainScene extends Phaser.Scene {
             Phaser.Input.Keyboard.KeyCodes.SPACE
         );
         this.player = Ship.create(this);
-        this.alienManager = new AlienManager(this, this.waveSeed);
+        this.alienManager = new AlienManager(this, this.waveSeed, this.premiumProgress);
         this.scoreManager = new ScoreManager(this);
         this.rapidFire = new RapidFire(this, (previous, current) => {
             // Recalculate the pending shot from its original fire time so a
@@ -135,6 +138,8 @@ export class MainScene extends Phaser.Scene {
             this.elonAlly.clear();
             if (this.wojak) this.wojak.clear();
             this.completedBossWave = 0;
+            this.premiumProgress.reset();
+            if (this.alienManager.clearPremiumWeapons) this.alienManager.clearPremiumWeapons();
             this.alienManager.onDescent = undefined;
             this.pendingCleanup = [];
         });
@@ -166,6 +171,7 @@ export class MainScene extends Phaser.Scene {
             const complete = this.wojak.update(delta);
             if (complete) {
                 this.completedBossWave = this.wave;
+                this.premiumProgress.recordDefeat(WaveDirectorConfig.boss.type, this.wave);
                 this.state = GameState.WaveTransition;
                 this.nextWaveReadyAt = this.time.now;
                 this.scoreManager.setWaveText(this.wave + 1);
@@ -192,6 +198,11 @@ export class MainScene extends Phaser.Scene {
         }
         if (this.time.now > this.firingTimer) {
             this._enemyFires();
+        }
+
+        // Advance immunity before collisions so a new hit keeps its full protection window.
+        if (this.state === GameState.Playing && this.alienManager.updatePremiums) {
+            this.alienManager.updatePremiums(delta, this.player, () => this._damagePlayer());
         }
 
         this.physics.overlap(
@@ -257,8 +268,13 @@ export class MainScene extends Phaser.Scene {
         if (this.state !== GameState.Playing || !bullet.active || !alien.active) {
             return;
         }
-        let explosion: Kaboom = this.assetManager.explosions.get();
         bullet.disableBody(true, true);
+        const premium = premiumInvaderOf(alien);
+        if (premium && (!premium.hit() || !premium.defeated)) {
+            this.pendingCleanup.push(() => bullet.destroy());
+            return;
+        }
+        const explosion: Kaboom = this.assetManager.explosions.get();
         alien.kill(explosion);
         this.pendingCleanup.push(() => {
             bullet.destroy();
@@ -324,6 +340,7 @@ export class MainScene extends Phaser.Scene {
         this.player.setVelocity(0, 0);
         this.player.disableBody(true, true);
         this.alienManager.stopMovement();
+        if (this.alienManager.clearPremiumWeapons) this.alienManager.clearPremiumWeapons();
         if (this.bananaBombs) this.bananaBombs.clear();
         if (this.elonAlly) this.elonAlly.clear();
     }
@@ -427,6 +444,7 @@ export class MainScene extends Phaser.Scene {
         stopPopcatSounds(this);
         if (this.wojak) this.wojak.clear();
         this.completedBossWave = 0;
+        this.premiumProgress.reset();
         if (this.rapidFire) this.rapidFire.clear();
         if (this.elonAlly) this.elonAlly.clear();
         if (this.damageFeedback) this.damageFeedback.clear();

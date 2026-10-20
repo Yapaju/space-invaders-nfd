@@ -81,6 +81,25 @@ h.update(0, 0); h.advance(1199, 0); assert.equal(h.images.length, 2);
 h.advance(1, 0); assert.equal(h.images.length, 3, '0% immediately switches to C cadence');
 
 // Force rain and size 5, including the longest sprite at both hover extremes.
+// Premium multipliers change only permission intervals, never pending rain or flight delta.
+{
+    const premium = harness(() => .99);
+    const tick = delta => premium.weapon.update(delta, -70, true, premium.emitter, premium.player, () => {}, 2);
+    tick(200); assert.equal(premium.images.length, 0);
+    tick(200); assert.equal(premium.images.length, 1);
+    assert.deepEqual(Array.from(premium.weapon.pending, p => p.delay), [250, 500]);
+    const y = premium.images[0].y;
+    tick(100);
+    assert.equal(premium.images[0].y - y, 16, 'flight still moves at 160 px/s');
+    assert.deepEqual(Array.from(premium.weapon.pending, p => p.delay), [150, 400], 'rain delay uses real time');
+    tick(150); assert.equal(premium.images.length, 2, 'second rain drop after real 250 ms');
+    const pending = JSON.stringify(premium.weapon.pending);
+    premium.weapon.elapsed = 9999;
+    premium.weapon.update(0, -30, true, premium.emitter, premium.player, () => {}, 1.5);
+    assert.equal(premium.weapon.elapsed, 0, 'new phase discards stale cooldown');
+    assert.equal(JSON.stringify(premium.weapon.pending), pending, 'new phase preserves pending rain');
+    assert.equal(premium.images.length, 2, 'phase change does not burst');
+}
 for (const spawnY of [289, 303]) {
     h = harness(() => 0.99);
     for (let i = 0; i < 4; i++) h.update(200, -70, true, spawnY);

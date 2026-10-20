@@ -58,7 +58,7 @@ export class WojakCandles {
     constructor(private scene: Phaser.Scene, private random: () => number = Math.random) {}
 
     update(delta: number, portfolio: number, enabled: boolean, emitter: CandleEmitter,
-        player: Phaser.Physics.Arcade.Sprite, damage: () => void) {
+        player: Phaser.Physics.Arcade.Sprite, damage: () => void, attackRate = 1) {
         if (!enabled || !player.active) { this.clear(); return; }
         const phase = candlePhase(portfolio);
         if (phase !== this.phase) {
@@ -97,7 +97,7 @@ export class WojakCandles {
         due.forEach(drop => this.spawn(drop, emitter, body.top));
 
         this.elapsed += delta;
-        if (this.elapsed < phase.interval) return;
+        if (this.elapsed < phase.interval / attackRate) return;
         this.elapsed = 0;
         const pattern = (['single', 'gap', 'rain'] as CandlePattern[])[weightedCandleChoice(phase.patterns, this.random)];
         const drops = this.plan(pattern, phase.sizes, body.width, emitter);

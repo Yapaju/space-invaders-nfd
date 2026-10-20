@@ -18,6 +18,16 @@ export const WaveDirectorConfig = {
         maxEnemies: 24
     },
     composition: { minimumTypes: 2, maximumTypes: 3, recentUnlockWeight: 1.25, recentUnlockWaves: 5 },
+    premiumInvaders: {
+        // Owner-approved normal spawning. Enable explicitly for forced-spawn debugging.
+        testMode: { enabled: false, forceWojakEveryRegularWave: true },
+        waitingRegularWaves: 3,
+        types: [{ bossType: 'wojak', spawnProbability: 0.10, columns: 2, rows: 2 }],
+        wojak: {
+            explosionScale: 2, hitFlashCount: 4,
+            attackRates: { plus25: 1.5, zero: 1.5, minus30: 1.5, minus70: 2 }
+        }
+    },
     firing: {
         baseTimerMs: 1610, cycleBaselineReduction: 0.02,
         timerMultipliers: [1, 0.90, 0.75, 0.60, 0.50],
@@ -64,7 +74,7 @@ export function waveSeedFromSearch(search: string): number {
     return Number.isSafeInteger(seed) && seed <= 0xffffffff ? seed : WaveDirectorConfig.seed;
 }
 
-function randomForWave(seed: number, wave: number) {
+export function randomForWave(seed: number, wave: number) {
     let state = 2166136261;
     const key = `${seed}:${wave}`;
     for (let i = 0; i < key.length; i++) state = Math.imul(state ^ key.charCodeAt(i), 16777619);
@@ -74,6 +84,14 @@ function randomForWave(seed: number, wave: number) {
         t ^= t + Math.imul(t ^ t >>> 7, 61 | t);
         return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
+}
+
+export function seededShuffle<T>(values: T[], random: () => number): T[] {
+    for (let i = values.length - 1; i > 0; i--) {
+        const j = Math.floor(random() * (i + 1));
+        [values[i], values[j]] = [values[j], values[i]];
+    }
+    return values;
 }
 
 function weighted<T>(values: T[], weight: (value: T) => number, random: () => number): T {
@@ -119,10 +137,7 @@ export function getWavePlan(wave: number, seed = WaveDirectorConfig.seed,
     }
     // Balanced slot counts avoid an accidentally overwhelming all-but-one mix.
     const enemies = slots.map((_, index) => composition[index % composition.length]);
-    for (let i = enemies.length - 1; i > 0; i--) {
-        const j = Math.floor(random() * (i + 1));
-        [enemies[i], enemies[j]] = [enemies[j], enemies[i]];
-    }
+    seededShuffle(enemies, random);
     const speedMultiplier = Math.min(config.movement.maxMultiplier,
         config.movement.multipliers[(wave - 1) % config.movement.multipliers.length]);
     const cycleIndex = Math.floor((wave - 1) / config.movement.multipliers.length);

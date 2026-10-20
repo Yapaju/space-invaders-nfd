@@ -138,9 +138,12 @@ export class WojakChartHistory {
             remaining -= consumed;
         }
     }
-    freeze() {
+    settle() {
         this.shown = this.candles.length;
         this.formation = 1;
+    }
+    freeze() {
+        this.settle();
         this.frozen = true;
     }
 }

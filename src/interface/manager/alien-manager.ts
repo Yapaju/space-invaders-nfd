@@ -1,6 +1,9 @@
 import { Alien } from "../alien";
 import { getWaveConfiguration, INVADERS_PER_WAVE, WaveConfiguration } from "../wave-config";
 import { WaveDirectorConfig } from '../wave-director';
+import { PremiumProgress, PremiumFormationPlan, planPremiumFormation } from '../premium-spawn';
+import { premiumInvaderOf } from '../premium-invader';
+import { createPremiumInvader } from '../premium-registry';
 
 export class AlienManager {
     aliens: Phaser.Physics.Arcade.Group;
@@ -14,11 +17,14 @@ export class AlienManager {
     private direction = 1;
     private movementStopped = false;
     private speed = WaveDirectorConfig.movement.regularSpeed;
+    private initialEntityCount = INVADERS_PER_WAVE;
+    premiumPlan: PremiumFormationPlan;
     get hasAliveAliens(): boolean {
         return this.aliens.countActive(true) > 0;
     }
 
-    constructor(private _scene: Phaser.Scene, private seed = WaveDirectorConfig.seed) {
+    constructor(private _scene: Phaser.Scene, private seed = WaveDirectorConfig.seed,
+        private progress = new PremiumProgress()) {
         this.aliens = this._scene.physics.add.group({
             maxSize: INVADERS_PER_WAVE,
             classType: Alien,
@@ -29,7 +35,7 @@ export class AlienManager {
     }
 
     getRandomAliveEnemy(): Alien | undefined {
-        let aliens = this.aliens.getChildren().filter(alien => alien.active) as Alien[];
+        let aliens = this.aliens.getChildren().filter(alien => alien.active && !premiumInvaderOf(alien as Alien)) as Alien[];
         if (!aliens.length) {
             return undefined;
         }
@@ -65,7 +71,7 @@ export class AlienManager {
         const bounds = this._scene.physics.world.bounds;
         // Scale the wave's starting speed linearly from 1x at full strength to
         // 1.5x for the final survivor, without changing position or direction.
-        const destroyedFraction = (this.aliens.maxSize - aliens.length) / (this.aliens.maxSize - 1);
+        const destroyedFraction = (this.initialEntityCount - aliens.length) / Math.max(1, this.initialEntityCount - 1);
         const multiplier = 1 + 0.5 * Math.max(0, Math.min(1, destroyedFraction));
         let remaining = this.speed * multiplier * Math.max(0, delta) / 1000;
         // Consume travel up to each edge, then reverse and descend exactly once.
@@ -100,6 +106,8 @@ export class AlienManager {
             body.reset(alien.x + x, alien.y + y);
             // Phaser 3.22 reset() ignores custom offsets until preUpdate.
             body.preUpdate(false, 0);
+            const premium = premiumInvaderOf(alien);
+            if (premium) premium.syncFormation();
         });
     }
 
@@ -107,10 +115,37 @@ export class AlienManager {
         const bounds = this._scene.physics.world.bounds;
         const config = this.configuration = getWaveConfiguration(wave, this.seed, bounds);
         this.aliens.clear(true, true);
-        config.slots.forEach((slot, index) => {
+        this.premiumPlan = planPremiumFormation(config, this.progress);
+        this.premiumPlan.regulars.forEach(entry => {
+            const slot = config.slots[entry.slot];
             const alien: Alien = this.aliens.create(slot.x, slot.y);
-            alien.configure(config.enemies[index], this.direction);
+            alien.configure(entry.type, this.direction);
             alien.setImmovable(false);
+        });
+        this.premiumPlan.premiums.forEach(footprint => {
+            const premium = createPremiumInvader(this._scene, footprint);
+            this.aliens.add(premium.spawn());
+            premium.setFormationDirection(this.direction);
+        });
+        this.initialEntityCount = this.aliens.getChildren().length;
+    }
+
+    updatePremiums(delta: number, player: Phaser.Physics.Arcade.Sprite, damage: () => void) {
+        (this.aliens.getChildren().slice() as Alien[]).forEach(alien => {
+            const premium = premiumInvaderOf(alien);
+            if (premium && alien.active && player.active) {
+                premium.update(delta);
+                premium.updateWeapons(delta, player, damage);
+            }
+        });
+    }
+    clearPremiumWeapons() {
+        // Phaser may destroy the group before the scene's shutdown listener.
+        // Its scene-owned roots have already disposed their controllers then.
+        if (!this.aliens.children) return;
+        (this.aliens.getChildren() as Alien[]).forEach(alien => {
+            const premium = premiumInvaderOf(alien);
+            if (premium) premium.stopWeapons();
         });
     }
 

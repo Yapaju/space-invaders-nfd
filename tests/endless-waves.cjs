@@ -120,6 +120,8 @@ const { PepePoses, PonkePoses, PopcatPoses, InvaderCanvas, prepareEnemySkins } =
 const { PopcatSettings } = load('src/interface/popcat-lights.ts');
 const { PopcornSettings, PopcornAssets, PopcornProjectile, firePopcatAttack, popcatMouthPosition } = load('src/interface/popcat-weapons.ts');
 const {WaveDirectorConfig, firingIntervalForWave} = load('src/interface/wave-director.ts');
+// Preserve full normal-wave regression coverage independently of forced Premium testing.
+WaveDirectorConfig.premiumInvaders.testMode.enabled=false;
 const expectedEnemyTexture = (type, left = false) => type === EnemyType.Popcat ?
     `popcat-${left ? 'left' : 'right'}` : type === EnemyType.Ponke ?
     `ponke-${left ? 'left' : 'right'}` : left ? 'pepe-left' : 'alien';

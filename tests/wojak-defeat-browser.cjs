@@ -39,6 +39,8 @@ function load(id) {
     });
     return module.exports;
 }
+// Isolate original boss presentation; Premium has its own default-on suite.
+load('src/interface/wave-director').WaveDirectorConfig.premiumInvaders.testMode.enabled=false;
 window.testGame = new Phaser.Game({type:location.search.includes('canvas')?Phaser.CANVAS:Phaser.WEBGL,
     width:800,height:600,backgroundColor:'rgb(47,52,55)',
     audio:{noAudio:true},physics:{default:'arcade'},scene:load('src/scenes/main').MainScene});

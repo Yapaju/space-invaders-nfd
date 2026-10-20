@@ -172,19 +172,19 @@ export class WojakBoss {
     readonly candles: WojakCandles;
     readonly tears: WojakTears;
     sprite: Phaser.Physics.Arcade.Sprite;
-    private character: Phaser.GameObjects.Image;
-    private foreground: Phaser.GameObjects.Image;
-    private lighting: Phaser.GameObjects.Image;
-    private percentage: Phaser.GameObjects.Text;
-    private charts: WojakCharts;
+    protected character: Phaser.GameObjects.Image;
+    protected foreground: Phaser.GameObjects.Image;
+    protected lighting: Phaser.GameObjects.Image;
+    protected percentage: Phaser.GameObjects.Text;
+    protected charts: WojakCharts;
     private visualDirection = 0;
     private visualCharacter: AssetType;
     private visualLighting: AssetType;
-    private flashElapsed = WojakSettings.milestoneFlashDuration;
-    private pendingFlashes = 0;
+    protected flashElapsed = WojakSettings.milestoneFlashDuration;
+    protected pendingFlashes = 0;
     portfolio = 50;
     phase = WojakPhase.Removed;
-    private direction = 1;
+    protected direction = 1;
     private entranceElapsed = 0;
     private patrolElapsed = 0;
     private completionElapsed = 0;
@@ -198,7 +198,7 @@ export class WojakBoss {
     private pumpCharacter: Phaser.GameObjects.Image;
     private pumpBubble: Phaser.GameObjects.Image;
 
-    constructor(private scene: Phaser.Scene) {
+    constructor(protected scene: Phaser.Scene) {
         this.candles = new WojakCandles(scene);
         this.tears = new WojakTears(scene);
     }
@@ -220,12 +220,12 @@ export class WojakBoss {
         };
     }
 
-    updateWeapons(delta: number, player: Phaser.Physics.Arcade.Sprite, damage: () => void) {
+    updateWeapons(delta: number, player: Phaser.Physics.Arcade.Sprite, damage: () => void, attackRate = 1) {
         const geometry = this.weaponGeometry();
         const enabled = () => this.shootingEnabled && !!this.sprite && this.sprite.active;
-        this.candles.update(delta, this.portfolio, enabled(), geometry.candles, player, damage);
+        this.candles.update(delta, this.portfolio, enabled(), geometry.candles, player, damage, attackRate);
         // Candle damage can synchronously end the encounter; recheck the gate.
-        this.tears.update(delta, this.portfolio, enabled(), geometry.tears, player, damage);
+        this.tears.update(delta, this.portfolio, enabled(), geometry.tears, player, damage, attackRate);
     }
 
     get shootingEnabled() { return this.phase === WojakPhase.Patrol; }
@@ -233,8 +233,23 @@ export class WojakBoss {
     start() {
         if (this.sprite) return;
         this.clear();
-        this.sprite = this.scene.physics.add.sprite((WojakSettings.patrolLeftX + WojakSettings.patrolRightX) / 2,
-            WojakSettings.patrolY, WojakLayers.right.ship);
+        this.createPresentation((WojakSettings.patrolLeftX + WojakSettings.patrolRightX) / 2, WojakSettings.patrolY);
+        this.entranceY = this.scene.physics.world.bounds.top -
+            (this.sprite.height - this.sprite.displayOriginY) * this.sprite.scaleY - 1;
+        this.phase = WojakPhase.Entrance;
+        this.sprite.y = this.entranceY;
+        this.syncBody();
+    }
+
+    protected get displayScale() { return WojakSettings.displayScale; }
+    protected get collisionWidth() { return WojakSettings.hitboxWidth; }
+    protected get collisionHeight() { return WojakSettings.hitboxHeight; }
+    protected get centeredPresentation() { return false; }
+    protected createSprite(x: number, y: number, texture: AssetType): Phaser.Physics.Arcade.Sprite {
+        return this.scene.physics.add.sprite(x, y, texture);
+    }
+    protected createPresentation(x: number, y: number) {
+        this.sprite = this.createSprite(x, y, WojakLayers.right.ship);
         this.sprite.setImmovable(true).setDepth(2);
         const body = this.sprite.body as Phaser.Physics.Arcade.Body;
         body.moves = false;
@@ -253,11 +268,6 @@ export class WojakBoss {
             .setShadow(0, 0, visual.percentageGlow, visual.percentageGlowBlur, true, true);
         this.updatePercentage();
         this.applyDirection();
-        this.entranceY = this.scene.physics.world.bounds.top -
-            (this.sprite.height - this.sprite.displayOriginY) * this.sprite.scaleY - 1;
-        this.phase = WojakPhase.Entrance;
-        this.sprite.y = this.entranceY;
-        this.syncBody();
     }
 
     // Returns true once, only after the entire defeat cinematic has finished.
@@ -446,9 +456,10 @@ export class WojakBoss {
         this.visualDirection = this.direction;
         const layer = this.direction > 0 ? WojakLayers.right : WojakLayers.left;
         const visual = WojakVisualSettings;
-        const scale = WojakSettings.displayScale;
+        const scale = this.displayScale;
         this.sprite.setTexture(layer.ship).setScale(scale)
-            .setOrigin(layer.anchorX / visual.canvasWidth, layer.anchorY / visual.canvasHeight);
+            .setOrigin(this.centeredPresentation ? 0.5 : layer.anchorX / visual.canvasWidth,
+                this.centeredPresentation ? 0.5 : layer.anchorY / visual.canvasHeight);
         // Split the ship without double drawing its translucent pixels.
         this.sprite.setCrop(0, 0, visual.canvasWidth, visual.cockpitRimY);
         this.foreground.setTexture(layer.ship).setScale(scale).setOrigin(this.sprite.originX, this.sprite.originY)
@@ -456,9 +467,9 @@ export class WojakBoss {
         this.percentage.setAngle(layer.percentageAngle);
         const body = this.sprite.body as Phaser.Physics.Arcade.Body;
         body.updateBounds();
-        body.setSize(WojakSettings.hitboxWidth / scale, WojakSettings.hitboxHeight / scale, false);
-        body.setOffset(layer.anchorX - WojakSettings.hitboxWidth / scale / 2,
-            layer.anchorY - WojakSettings.hitboxHeight / scale / 2);
+        body.setSize(this.collisionWidth / scale, this.collisionHeight / scale, false);
+        body.setOffset(layer.anchorX - this.collisionWidth / scale / 2,
+            layer.anchorY - this.collisionHeight / scale / 2);
     }
 
     private characterPose() {
@@ -472,7 +483,7 @@ export class WojakBoss {
         return this.portfolio <= WojakSettings.poseThreshold ? Wojak25Poses[direction] : WojakLayers[direction];
     }
 
-    private updatePercentage() {
+    protected updatePercentage() {
         const visual = WojakVisualSettings;
         const red = this.portfolio <= 0;
         const defeated = this.phase === WojakPhase.Complete;
@@ -482,13 +493,13 @@ export class WojakBoss {
             .setShadow(0, 0, red ? visual.percentageRedGlow : visual.percentageGlow,
                 defeated ? 0 : visual.percentageGlowBlur, !defeated, !defeated);
         // Keep placement/perspective; only shrink values that need extra room.
-        this.percentage.setScale(WojakSettings.displayScale *
+        this.percentage.setScale(this.displayScale *
             Math.min(1, visual.percentageMaxWidth / this.percentage.width));
     }
 
     private applyLighting() {
         this.lighting.setVisible(this.phase !== WojakPhase.Complete);
-        this.lighting.setOrigin(this.sprite.originX, this.sprite.originY).setScale(WojakSettings.displayScale)
+        this.lighting.setOrigin(this.sprite.originX, this.sprite.originY).setScale(this.displayScale)
             .setPosition(this.sprite.x, this.sprite.y);
         if (this.phase === WojakPhase.Complete) return;
         const direction = this.direction > 0 ? 'right' : 'left';
@@ -504,23 +515,24 @@ export class WojakBoss {
         if (this.visualCharacter === pose.character) return;
         this.visualCharacter = pose.character;
         this.character.setTexture(pose.character).setOrigin(0, 0)
-            .setScale(WojakSettings.displayScale * pose.characterScale)
+            .setScale(this.displayScale * pose.characterScale)
             .setCrop(0, 0, WojakVisualSettings.canvasWidth,
                 (WojakVisualSettings.cockpitRimY - pose.characterY) / pose.characterScale);
     }
 
     // Three distinct 100ms ON / 100ms OFF pulses; no combat gates or timers.
-    private updateFlash(delta: number) {
-        if (this.flashElapsed >= WojakSettings.milestoneFlashDuration) return;
+    protected get flashDuration() { return WojakSettings.milestoneFlashDuration; }
+    protected updateFlash(delta: number) {
+        if (this.flashElapsed >= this.flashDuration) return;
         this.flashElapsed += Math.max(0, delta);
-        while (this.flashElapsed >= WojakSettings.milestoneFlashDuration && this.pendingFlashes > 0) {
-            this.flashElapsed -= WojakSettings.milestoneFlashDuration;
+        while (this.flashElapsed >= this.flashDuration && this.pendingFlashes > 0) {
+            this.flashElapsed -= this.flashDuration;
             this.pendingFlashes--;
         }
-        this.flashElapsed = Math.min(WojakSettings.milestoneFlashDuration, this.flashElapsed);
+        this.flashElapsed = Math.min(this.flashDuration, this.flashElapsed);
         const layers = [this.sprite, this.character, this.foreground];
         const cycle = WojakSettings.milestoneFlashOnDuration + WojakSettings.milestoneFlashOffDuration;
-        if (this.flashElapsed === WojakSettings.milestoneFlashDuration ||
+        if (this.flashElapsed === this.flashDuration ||
             this.flashElapsed % cycle >= WojakSettings.milestoneFlashOnDuration) {
             layers.forEach(layer => layer.clearTint());
             return;
@@ -529,29 +541,29 @@ export class WojakBoss {
     }
 
     // One logical boss owns every layer; only the ship has an Arcade body.
-    private syncLayers() {
+    protected syncLayers() {
         this.applyDirection();
         this.applyCharacterPose();
         this.applyLighting();
         const pose = this.characterPose();
         const layer = this.direction > 0 ? WojakLayers.right : WojakLayers.left;
-        const scale = WojakSettings.displayScale;
-        const left = this.sprite.x - layer.anchorX * scale;
-        const top = this.sprite.y - layer.anchorY * scale;
+        const scale = this.displayScale;
+        const left = this.sprite.x - this.sprite.displayOriginX * scale;
+        const top = this.sprite.y - this.sprite.displayOriginY * scale;
         if (this.charts) this.charts.sync(left, top, scale, this.direction > 0 ? 'right' : 'left');
         this.foreground.setPosition(this.sprite.x, this.sprite.y);
         this.character.setPosition(left + pose.characterX * scale, top + pose.characterY * scale);
         this.percentage.setPosition(left + layer.percentageX * scale, top + layer.percentageY * scale);
     }
 
-    private syncBody() {
+    protected syncBody() {
         this.syncLayers();
         const body = this.sprite.body as Phaser.Physics.Arcade.Body;
         body.reset(this.sprite.x, this.sprite.y);
         body.preUpdate(false, 0);
     }
 
-    private remove() {
+    protected remove() {
         this.clearPump();
         if (this.godCandle) this.godCandle.destroy();
         if (this.godCandleBody) this.godCandleBody.destroy();

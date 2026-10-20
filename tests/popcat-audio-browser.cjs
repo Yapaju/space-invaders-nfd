@@ -34,7 +34,8 @@ const bootstrap = '<script src="/phaser.js"></script><script>' +
     'new Function("module","exports","require",modules[id])(m,m.exports,name=>{' +
     'if(name==="phaser")return Phaser;const p=id.split("/");p.pop();' +
     'name.split("/").forEach(v=>{if(v==="..")p.pop();else if(v!==".")p.push(v)});return load(p.join("/"))});return m.exports;}' +
-    'load("src/game");</script>';
+    // This suite checks the normal WD1 path; Premium has its own default-on integration suite.
+    'load("src/interface/wave-director").WaveDirectorConfig.premiumInvaders.testMode.enabled=false;load("src/game");</script>';
 const html = fs.readFileSync(path.join(root,'dist/index.html'),'utf8')
     .replace('<script src="game.js"></script>', bootstrap);
 async function serve(route) {
