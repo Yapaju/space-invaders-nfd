@@ -100,11 +100,11 @@ async function serve(route) {
                     window.ship=b.sprite; window.startY=ship.y;
                     if(!b.character.texture.key.includes('rekt') || b.lighting.visible || b.percentage.text!=='REKT') throw Error('REKT presentation');
                 },direction);
-                for (const [name,delta] of [['slide',250],['entered',250],['pause',999],['bubble',1],['pop',150],['settled',100],['hold',999],['fade-start',1],['fading',100],['prelaunch',99],['start',1],['depart',250],['departed',250],['rising',100],['contact',600],['push',1000],['exit',999]]) {
+                for (const [name,delta] of [['slide',1000],['entered',1000],['pause',649],['bubble',1],['pop',150],['settled',100],['hold',999],['fade-start',1],['fading',100],['prelaunch',99],['start',1],['depart',250],['departed',250],['rising',100],['contact',600],['push',1000],['exit',999]]) {
                     const result=await page.evaluate(({delta,name}) => {
                         const b=s.wojak;
                         if(b.update(delta)) throw Error('premature completion');
-                        const t=b.completionElapsed;
+                        const t=b.completionElapsed-1150; // Bubble-relative schedule is unchanged.
                         if(t<2950 && (ship.y!==startY || b.godCandle)) throw Error('premature candle');
                         if(t<3450) {
                             const c=b.pumpCharacter,p=b.pumpBubble;
@@ -147,7 +147,7 @@ async function serve(route) {
                     if(!b.update(1) || b.sprite || candle.active || body.active || ship.getBounds().bottom>=0) throw Error('exit cleanup');
                     if(b.update(10000)) throw Error('duplicate completion');
                     // Reset while a candle is active must destroy it immediately.
-                    b.start(); b.update(1500); for(let i=0;i<150;i++)b.hit(); b.update(4000);
+                    b.start(); b.update(1500); for(let i=0;i<150;i++)b.hit(); b.update(5000);
                     const cancelled=b.godCandle, cancelledBody=b.godCandleBody; s.restart();
                     if(cancelled.active || cancelledBody.active || b.godCandleBody || b.godCandle || b.sprite || s.wave!==1) throw Error('restart cleanup');
                 });
@@ -160,7 +160,7 @@ async function serve(route) {
                 s.cameras.main.setSize(width,height);
                 s.physics.world.setBounds(0,0,width,height);
             },{width,height});
-            for (const ms of [500,1499,1500,1650,1750,2749,2850,3200]) {
+            for (const ms of [2000,2649,2650,2800,2900,3899,4000,4350]) {
                 await page.evaluate(({ms,width,height}) => {
                     s.restart(); s._startWojak();
                     const b=s.wojak;b.update(1500);b.sprite.x=[205,400,595][ms%3];for(let i=0;i<150;i++)b.hit();b.update(ms);
@@ -180,7 +180,7 @@ async function serve(route) {
             }
         }
         await page.evaluate(() => {
-            for(const action of ['restart','_gameOver']) for(const ms of [0,250,500,1499,1500,1650,1750,2749,2850,2950,3200,3450,4150,5150,6149]) {
+            for(const action of ['restart','_gameOver']) for(const ms of [0,1000,2000,2649,2650,2800,2900,3899,4000,4100,4350,4600,5300,6300,7299]) {
                 s.restart();s._startWojak();
                 const b=s.wojak;b.update(1500);for(let i=0;i<150;i++)b.hit();
                 const c=b.pumpCharacter,p=b.pumpBubble;b.update(ms);
@@ -191,6 +191,6 @@ async function serve(route) {
             }
         });
         assert.deepEqual(errors,[]);
-        console.log('PASS: Phaser Canvas/WebGL, both orientations and opposite ship positions, combat/threshold regressions, bottom-left half-size PUMP IT, full entrance/pause/pop/hold/fade/downward exit timeline, 2950ms candle launch, unchanged candle width, half-speed rise/push, synchronized contact and exit, 480x800 and 1280x720 overlays, restart/death at fifteen stages, one-shot completion; no browser errors.');
+        console.log('PASS: Phaser Canvas/WebGL, both orientations and opposite ship positions, combat/threshold regressions, bottom-left half-size PUMP IT, full entrance/pause/pop/hold/fade/downward exit timeline, 2000ms entrance, 650ms pause, 4100ms candle launch, unchanged candle width, half-speed rise/push, synchronized contact and exit, 480x800 and 1280x720 overlays, restart/death at fifteen stages, one-shot completion; no browser errors.');
     } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

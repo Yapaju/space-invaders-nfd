@@ -1,4 +1,5 @@
 import { AssetType, SoundType } from "./assets";
+import { AudioBalance } from './audio-balance';
 
 export const ElectricLaserSettings = {
     animation: 'rapid-electric-laser',
@@ -38,7 +39,7 @@ export class Bullet extends Phaser.Physics.Arcade.Sprite {
         body.setSize(this.normalWidth / scale, this.normalHeight / scale, false);
         body.setOffset(this.width * this.originX - this.normalWidth * this.originX / scale,
             this.height * this.originY - this.normalHeight * this.originY / scale);
-        this.scene.sound.play(SoundType.Shoot);
+        this.scene.sound.play(SoundType.Shoot, { volume: AudioBalance.gains[SoundType.Shoot] });
         this.setPosition(x, y);
         this.setVelocityY(-400);
     }

@@ -110,9 +110,101 @@ async function serve(route) {
             if(!shots.length || shots[0].body.velocity.y!==-400) throw Error('keyboard shooting');
         });
         await page.keyboard.up('Space');
+        // Read real held keyboard state while shots are suppressed by cooldown.
+        // Every transition must retain the normalized frame and Arcade geometry.
+        const poseGeometry = await page.evaluate(() => {
+            s.bulletTime=Infinity;
+            window.playerGeometry=()=>{
+                const p=s.player,b=p.body;
+                return [p.x,p.y,p.width,p.height,p.scaleX,p.scaleY,p.originX,p.originY,
+                    b.left,b.top,b.width,b.height,b.offset.x,b.offset.y];
+            };
+            s.player.body.preUpdate(false,0);
+            return {geometry:playerGeometry(),shots:s.assetManager.bullets.getChildren().filter(v=>v.active).length};
+        });
+        let held=new Set();
+        async function poseStep(keys, expected) {
+            const next=new Set(keys);
+            for(const key of held) if(!next.has(key)) await page.keyboard.up(key);
+            for(const key of next) if(!held.has(key)) await page.keyboard.down(key);
+            held=next;
+            const actual=await page.evaluate(()=>{
+                s.time.now+=40;s._shipKeyboardHandler();s.player.body.preUpdate(false,0);
+                return {key:s.player.texture.key,geometry:playerGeometry(),
+                    shots:s.assetManager.bullets.getChildren().filter(v=>v.active).length};
+            });
+            assert.equal(actual.key,expected);
+            assert.deepEqual(actual.geometry,poseGeometry.geometry,'pose switch changed player geometry');
+            assert.equal(actual.shots,poseGeometry.shots,'pose selection must not spawn shots');
+        }
+        await poseStep([],'ship');
+        await poseStep(['ArrowLeft'],'ship-left');
+        await poseStep(['ArrowRight'],'ship-turn-right');
+        await poseStep(['ArrowRight'],'ship-right');
+        await poseStep([],'ship');
+        await poseStep(['Space'],'ship-shooting');
+        for(let i=0;i<10;i++) await poseStep(['Space'],'ship-shooting');
+        await poseStep(['ArrowLeft','Space'],'ship-left-shooting');
+        await poseStep(['ArrowRight','Space'],'ship-right-shooting');
+        await poseStep(['Space'],'ship-shooting');
+        await poseStep([],'ship');
+        await poseStep(['ArrowLeft','Space'],'ship-left-shooting');
+        await poseStep(['ArrowLeft'],'ship-left');
+        await poseStep(['ArrowRight','Space'],'ship-right-shooting');
+        await poseStep(['ArrowRight'],'ship-right');
+        await poseStep([],'ship');
+        await poseStep(['Space'],'ship-shooting');
+        await page.evaluate(()=>{s.state='waveTransition';});
+        await poseStep(['Space'],'ship');
+        await poseStep(['ArrowLeft','Space'],'ship-left');
+        await poseStep(['ArrowRight','Space'],'ship-turn-right');
+        await poseStep(['ArrowRight','Space'],'ship-right');
+        await page.evaluate(()=>{s.state='playing';});
+        await poseStep(['ArrowRight','Space'],'ship-right-shooting');
+        await page.evaluate(()=>{s._startWojak();});
+        await poseStep(['Space'],'ship');
+        await page.evaluate(()=>{s.wojak.update(1499);});
+        await poseStep(['Space'],'ship');
+        await page.evaluate(()=>{s.wojak.update(1);});
+        await poseStep(['Space'],'ship-shooting');
+        await page.evaluate(()=>{for(let i=0;i<150;i++)s.wojak.hit();});
+        await poseStep(['Space'],'ship');
+        await page.evaluate(()=>{s.wojak.update(7300);s.state='playing';});
+        await poseStep(['Space'],'ship-shooting');
+        // Pause/resume handlers must refresh even while the scene loop is stopped.
+        const pauseState=await page.evaluate(()=>{
+            const b=s.player.body,velocity=[b.velocity.x,b.velocity.y];
+            s.sys.pause();
+            const paused=s.player.texture.key;
+            if(!s.sys.isPaused() || s.playerShootingEnabled)throw Error('pause eligibility');
+            s.sys.resume();
+            if(s.sys.isPaused() || !s.playerShootingEnabled)throw Error('resume eligibility');
+            return {paused,resumed:s.player.texture.key,geometry:playerGeometry(),velocity,
+                afterVelocity:[b.velocity.x,b.velocity.y],shots:s.assetManager.bullets.getChildren().filter(v=>v.active).length};
+        });
+        assert.equal(pauseState.paused,'ship');
+        assert.equal(pauseState.resumed,'ship-shooting');
+        assert.deepEqual(pauseState.geometry,poseGeometry.geometry);
+        assert.deepEqual(pauseState.afterVelocity,pauseState.velocity);
+        assert.equal(pauseState.shots,poseGeometry.shots,'pause/resume must not fire a shot');
+        await poseStep([],'ship');
+        console.log('PASS: eligibility-gated poses through wave transitions, actual boss entrance/completion, combat re-enable with held Space, native Phaser pause/resume, no extra shots or movement.');
+        await page.evaluate(()=>{
+            for(const key of ['ship-shooting','ship-left-shooting','ship-right-shooting']) {
+                const t=s.textures.get(key);
+                if(t.source[0].width!==335 || t.source[0].height!==320) throw Error('shooting frame dimensions');
+                s.textures.remove(key);
+            }
+        });
+        await poseStep(['Space'],'ship');
+        await poseStep(['ArrowLeft','Space'],'ship-left');
+        await poseStep(['ArrowRight','Space'],'ship-turn-right');
+        await poseStep(['ArrowRight','Space'],'ship-right');
+        await poseStep([],'ship');
+        console.log('PASS: all six real-keyboard player poses, held Space between shots, immediate release/direction/stop transitions, unchanged frame/scale/origin/position/Arcade body, reversal and missing-texture fallback.');
         await page.evaluate(() => {
             s.restart(); s._startWojak(); const b=s.wojak; b.update(1500);
-            for(let i=0;i<150;i++) b.hit(); b.update(1750); window.original=snapshot();
+            for(let i=0;i<150;i++) b.hit(); b.update(2900); window.original=snapshot();
         });
         for(const [width,height] of [[1366,768],[480,800],[1920,1080]]) {
             await page.setViewportSize({width,height});

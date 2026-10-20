@@ -4,7 +4,7 @@ import { applySkin, MemeSkins, PlayerCanvas, PlayerVisualScale } from "./skins";
 export class Ship {
     static readonly bulletOffset = 18 * PlayerVisualScale;
     // Normalized DOGE frames have bottom padding: a 12px frame margin leaves
-    // about 20-25px below the visible artwork across all five poses.
+    // about 20-25px below the visible artwork across the normalized poses.
     static readonly bottomFrameMargin = 12;
     private static poses = new WeakMap<Phaser.Physics.Arcade.Sprite, { direction: number; turnUntil: number }>();
 
@@ -16,7 +16,7 @@ export class Ship {
             y: bounds.bottom - this.bottomFrameMargin - height * (1 - skin.originY) };
     }
 
-    static setDirection(ship: Phaser.Physics.Arcade.Sprite, direction: number, now = 0) {
+    static setDirection(ship: Phaser.Physics.Arcade.Sprite, direction: number, now = 0, shooting = false) {
         const movement = Math.sign(direction);
         const pose = this.poses.get(ship) || { direction: 0, turnUntil: 0 };
         if (movement !== pose.direction) {
@@ -27,8 +27,13 @@ export class Ship {
         }
         this.poses.set(ship, pose);
         const turning = movement !== 0 && now < pose.turnUntil;
-        const texture = movement < 0 ? (turning ? AssetType.ShipTurnLeft : AssetType.ShipLeft) :
+        let texture = movement < 0 ? (turning ? AssetType.ShipTurnLeft : AssetType.ShipLeft) :
             movement > 0 ? (turning ? AssetType.ShipTurnRight : AssetType.ShipRight) : AssetType.Ship;
+        const shootingPoses = MemeSkins.Player.shootingPoses;
+        if (shooting && shootingPoses) {
+            const candidate = movement < 0 ? shootingPoses.left : movement > 0 ? shootingPoses.right : shootingPoses.idle;
+            if (ship.texture.manager.exists(candidate)) texture = candidate;
+        }
         // All poses share idle's dimensions, origin and hitbox. Change only when
         // needed, without resetting the physics body or its current movement.
         // Deadlines are checked each frame, so no queued timer can change a pose.

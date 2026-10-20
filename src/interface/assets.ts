@@ -41,6 +41,7 @@ export enum AssetType {
     ElonEscapeRight = "elon-ally-escape-right",
     ElonEscapeLeft = "elon-ally-escape-left",
     Alien = "alien",
+    PepeLeft = "pepe-left",
     PonkeLeft = "ponke-left",
     PonkeRight = "ponke-right",
     PopcatLeft = "popcat-left",
@@ -50,6 +51,9 @@ export enum AssetType {
     Ship = "ship",
     ShipLeft = "ship-left",
     ShipRight = "ship-right",
+    ShipShooting = "ship-shooting",
+    ShipLeftShooting = "ship-left-shooting",
+    ShipRightShooting = "ship-right-shooting",
     ShipTurnLeft = "ship-turn-left",
     ShipTurnRight = "ship-turn-right",
     Kaboom = "kaboom",
@@ -58,6 +62,7 @@ export enum AssetType {
 }
 
 export enum SoundType {
+    PopcatPop = "popcat-pop",
     Kaboom = "kaboom",
     Shoot = "shoot",
     InvaderKilled = "invaderKilled"

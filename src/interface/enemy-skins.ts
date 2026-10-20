@@ -2,6 +2,11 @@ import { AssetType } from './assets';
 
 // Retain the original PEPE frame for display size, formations and collision offsets.
 export const InvaderCanvas = { width: 337, height: 282 };
+export const PepePoses = [
+    { asset: AssetType.PepeLeft, path: 'meme-skins/pepe-invader-left.png' },
+    { asset: AssetType.Alien, path: 'meme-skins/pepe-invader-right.png' }
+];
+
 export const PonkePoses = [
     { asset: AssetType.PonkeLeft, path: 'meme-skins/ponke-invader-left.png' },
     { asset: AssetType.PonkeRight, path: 'meme-skins/ponke-invader-right.png' }
@@ -16,7 +21,7 @@ export const PopcatPoses = [
 
 export function prepareEnemySkins(scene: Phaser.Scene) {
     const frame = InvaderCanvas;
-    PonkePoses.concat(PopcatPoses).forEach(pose => {
+    PepePoses.concat(PonkePoses, PopcatPoses).forEach(pose => {
         if (scene.textures.exists(pose.asset)) {
             return;
         }

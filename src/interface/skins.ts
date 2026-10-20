@@ -8,6 +8,7 @@ export interface SkinDefinition {
     originY: number;
     // Collision rectangle in original PNG pixels, excluding padding/effects.
     hitbox: { x: number; y: number; width: number; height: number };
+    shootingPoses?: { idle: AssetType; left: AssetType; right: AssetType };
 }
 
 export const PlayerVisualScale = 1.4;
@@ -18,11 +19,13 @@ export const MemeSkins: { Player: SkinDefinition; Invader: SkinDefinition } = {
         path: 'meme-skins/player/gundam-purple-player.png',
         displayWidth: 52 * PlayerVisualScale,
         originX: 190 / 335, originY: 0.45,
-        hitbox: { x: 100, y: 42, width: 180, height: 195 }
+        hitbox: { x: 100, y: 42, width: 180, height: 195 },
+        shootingPoses: { idle: AssetType.ShipShooting,
+            left: AssetType.ShipLeftShooting, right: AssetType.ShipRightShooting }
     },
     Invader: {
         asset: AssetType.Alien,
-        path: 'meme-skins/pepe-invader.png',
+        path: 'meme-skins/pepe-invader-right.png',
         displayWidth: 48 * 1.4 * 1.30,
         originX: 0.5, originY: 0.5,
         hitbox: { x: 45, y: 25, width: 247, height: 210 }
@@ -32,7 +35,7 @@ export const MemeSkins: { Player: SkinDefinition; Invader: SkinDefinition } = {
 // Keep texture coordinates and the existing hitbox independent of PNG resolution.
 export const PlayerCanvas = { width: 335, height: 320 };
 
-export const PlayerPoses = [
+export const PlayerPoses: { asset: AssetType; path: string; optional?: boolean }[] = [
     { asset: AssetType.Ship, path: 'meme-skins/player/gundam-purple-player.png' },
     {
         asset: AssetType.ShipLeft, path: 'meme-skins/player/gundam-purple-player-left.png'
@@ -46,6 +49,15 @@ export const PlayerPoses = [
     },
     {
         asset: AssetType.ShipTurnRight, path: 'meme-skins/player/gundam-purple-player-right.png'
+    },
+    {
+        asset: AssetType.ShipShooting, path: 'meme-skins/player/gundam-purple-player-shooting.png', optional: true
+    },
+    {
+        asset: AssetType.ShipLeftShooting, path: 'meme-skins/player/gundam-purple-player-left-shooting.png', optional: true
+    },
+    {
+        asset: AssetType.ShipRightShooting, path: 'meme-skins/player/gundam-purple-player-right-shooting.png', optional: true
     }
 ];
 
@@ -73,6 +85,7 @@ export function preparePlayerPoses(scene: Phaser.Scene) {
             return;
         }
         if (!scene.textures.exists(`${pose.asset}-source`)) {
+            if (pose.optional) return; // Skins without shooting art keep their normal poses.
             throw new Error(`Missing DOGE pose texture: ${pose.path}`);
         }
         const image = scene.textures.get(`${pose.asset}-source`).getSourceImage() as HTMLImageElement;

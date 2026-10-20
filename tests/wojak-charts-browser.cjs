@@ -114,7 +114,7 @@ async function serve(route) {
                     results.push({ renderer, ...result, filename });
                 }
             }
-            // Exercise the real sprite registration and the unchanged defeat hold.
+            // Exercise registration and the project's current defeat timeline.
             await page.evaluate(() => {
                 const b = testScene.wojak;
                 const before = {x:b.charts.graphics.x,y:b.charts.graphics.y};
@@ -125,12 +125,16 @@ async function serve(route) {
                 b.update(999);
                 if (!b.sprite || JSON.stringify(b.charts.history)!==frozen) throw Error('REKT freeze');
                 if (b.update(1) || !b.sprite || !b.charts) throw Error('premature cleanup');
-                if (!b.update(1600) || b.sprite || b.charts) throw Error('defeat cleanup');
+                const { WojakSettings: w, WojakPumpSettings: p } = load('src/interface/wojak-boss');
+                const duration = p.entranceDuration + p.dramaticPauseDuration + p.bubblePopDuration +
+                    p.commandHoldDuration + p.bubbleFadeDuration + w.godCandleRiseDuration + w.godCandlePushDuration;
+                if (b.update(duration - 1001) || !b.sprite || !b.charts) throw Error('premature final cleanup');
+                if (!b.update(1) || b.sprite || b.charts) throw Error('defeat cleanup');
             });
         }
         assert.deepEqual(errors, []);
         fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
-        console.log(`PASS: actual Phaser Canvas/WebGL rendering, 40 stage/orientation screenshots at 800x600, preserved pump, shared seeded OHLC history, zero endpoint, movement, REKT freeze/lights/2600ms cleanup; no browser errors. Screenshots: ${output}`);
+        console.log(`PASS: actual Phaser Canvas/WebGL rendering, 40 stage/orientation screenshots at 800x600, preserved pump, shared seeded OHLC history, zero endpoint, movement, REKT freeze/lights and configured defeat cleanup; no browser errors. Screenshots: ${output}`);
     } finally {
         if (browser) await browser.close();
     }

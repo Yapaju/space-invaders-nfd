@@ -9,8 +9,8 @@ export function shouldStartWojakTest(development: boolean) {
     return development && WojakDevelopment.startAtEncounter;
 }
 
-// Temporary playtesting override. Intended production value: 10.
-export const WOJAK_TRIGGER_AFTER_WAVE = 1;
+// Encounter starts after this wave is cleared, before the next wave begins.
+export const WOJAK_TRIGGER_AFTER_WAVE = 10;
 
 export const WojakSettings = {
     afterWave: WOJAK_TRIGGER_AFTER_WAVE,
@@ -39,8 +39,8 @@ export const WojakSettings = {
 
 // Relative to REKT; the existing candle rise/push durations stay independent.
 export const WojakPumpSettings = {
-    entranceDuration: 500,
-    dramaticPauseDuration: 1000,
+    entranceDuration: 2000,
+    dramaticPauseDuration: 650,
     bubblePopDuration: 250,
     commandHoldDuration: 1000,
     bubbleFadeDuration: 200,

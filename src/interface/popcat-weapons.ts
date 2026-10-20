@@ -4,6 +4,7 @@ import { EnemyBullet } from './enemy-bullet';
 import { InvaderCanvas } from './enemy-skins';
 import { visibleImageBounds } from './skins';
 import { FORMATION_LOWEST_START_Y } from './wave-config';
+import { playPopcatSound } from './popcat-audio';
 
 // Sizes, speeds and accelerations use logical world pixels (800x600), seconds;
 // rotation uses degrees and animation/cooldown durations use milliseconds.
@@ -135,6 +136,7 @@ export class PopcornProjectile extends EnemyBullet {
         if (!this.transformed && body.velocity.y > 0 && this.y >= FORMATION_LOWEST_START_Y) {
             this.transformed = true;
             this.setTexture(AssetType.PopcornGiant);
+            playPopcatSound(this.scene, true);
             warningStarted = true;
         }
         if (!this.transformed) return;
@@ -172,6 +174,7 @@ export function firePopcatAttack(scene: Phaser.Scene, group: Phaser.Physics.Arca
     alien: Alien, _player: Phaser.Physics.Arcade.Sprite): boolean {
     if (!canPopcatFire(alien, scene.physics.world.bounds)) return false;
     alien.pop(); // Open only after the clearance check accepts an actual attack.
+    playPopcatSound(scene);
     const settings = PopcornSettings, mouth = popcatMouthPosition(alien);
     const direction = alien.texture.key.indexOf('left') >= 0 ? -1 : 1;
     const spawn = (vx: number, upwardSpeed: number, texture: AssetType) => {

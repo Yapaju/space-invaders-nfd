@@ -261,7 +261,13 @@ tears.advance(1); assert.equal(tears.sprites.length, 1);
 let tear = tears.sprites[0];
 near(Math.hypot(tear.body.velocity.x, tear.body.velocity.y), 120);
 near(tear.body.width, 500 * 32 / 1120); assert(tear.body.isCircle);
-assert(tear.body.width < tear.width * tear.scaleX / 2, 'body excludes transparent canvas');
+near(tear.body.height, 500 * 32 / 1120);
+near(tear.scaleX, 32 / 1120 * 0.7);
+near(tear.width * tear.scaleX, 1536 * 32 / 1120 * 0.7);
+near(tear.height * tear.scaleY, 1024 * 32 / 1120 * 0.7);
+const originalCenterOffset = Math.floor(250 * 32 / 1120) - 250 * 32 / 1120;
+near(tear.body.center.x, tear.x + originalCenterOffset);
+near(tear.body.center.y, tear.y + originalCenterOffset);
 near(tear.scaleX, tear.scaleY);
 const central = Math.atan2(tears.player.y - tears.emitter.y, tears.player.x - tears.emitter.x);
 near(Math.atan2(tear.body.velocity.y, tear.body.velocity.x), central);
@@ -274,6 +280,8 @@ const startX = tear.x, startY = tear.y;
 tears.player.x += 100; tears.emitter.x -= 100;
 tear.body.preUpdate(true, 0.1); tear.body.postUpdate();
 near(tear.x, startX + velocity.x * 0.1); near(tear.y, startY + velocity.y * 0.1);
+near(tear.body.center.x, tear.x + originalCenterOffset);
+near(tear.body.center.y, tear.y + originalCenterOffset);
 tears.update(100); near(tear.body.velocity.x, velocity.x); near(tear.body.velocity.y, velocity.y);
 near(tear.rotation, tearRotation());
 tears.update(0, -70); tears.advance(2499, -70); assert.equal(tears.sprites.length, 1);
@@ -323,6 +331,28 @@ for (const target of [{ x: 700, y: 550 }, { x: 100, y: 550 }, { x: 400, y: 50 }]
     sprite.body.preUpdate(true, 0.1); sprite.body.postUpdate();
     near(sourcePointAngle + sprite.rotation, -Math.PI / 2);
     h.weapon.clear();
+}
+
+// Visual-only reduction preserves contact at the old circle's edge, even outside
+// the smaller visible bulb, and retains the old offscreen cleanup boundary.
+for (const direction of [-1,1]) {
+    const h = tearHarness(); h.weapon.spawn(h.emitter,h.player,0);
+    const sprite = h.sprites[0];
+    sprite.setPosition(h.player.body[direction < 0 ? 'left' : 'right'] +
+        direction * (sprite.body.halfWidth-0.1) - originalCenterOffset,550);
+    sprite.body.preUpdate(false,0);
+    h.update(0); assert.equal(h.hits(),1,'original circle still damages at its edge');
+    h.update(0); assert.equal(h.hits(),1,'single tear damage');
+}
+{
+    const h=tearHarness(); h.weapon.spawn(h.emitter,h.player,0);
+    const sprite=h.sprites[0], art=sprite.getBounds();
+    const oldRight=(art.right-sprite.x)/0.7;
+    sprite.setPosition(-oldRight+0.5,200); sprite.body.preUpdate(false,0);
+    assert(sprite.getBounds().right<0,'smaller art is already offscreen');
+    h.update(0); assert(sprite.active,'original collision lifetime retained');
+    sprite.x-=1; sprite.body.preUpdate(false,0);
+    h.update(0); assert(!sprite.active,'cleanup at the original offscreen boundary');
 }
 
 const preload = new MainScene(), loaded = [];

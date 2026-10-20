@@ -4,6 +4,7 @@ import { Kaboom } from "./kaboom";
 import { EnemyType } from "./enemy-type";
 import { applySkin, MemeSkins } from "./skins";
 import { PopcatSettings } from "./popcat-lights";
+import { AudioBalance } from './audio-balance';
 
 export class Alien extends Phaser.Physics.Arcade.Sprite {
   enemyType = EnemyType.Pepe;
@@ -29,7 +30,7 @@ export class Alien extends Phaser.Physics.Arcade.Sprite {
     }
     const texture = this.enemyType === EnemyType.Ponke ?
       (direction < 0 ? AssetType.PonkeLeft : AssetType.PonkeRight) :
-      AssetType.Alien;
+      (direction < 0 ? AssetType.PepeLeft : AssetType.Alien);
     if (this.texture.key !== texture) {
       this.setTexture(texture);
     }
@@ -62,7 +63,7 @@ export class Alien extends Phaser.Physics.Arcade.Sprite {
       explosion.setX(this.x);
       explosion.setY(this.y);
       explosion.play(AnimationType.Kaboom)
-      this.scene.sound.play(SoundType.InvaderKilled)
+      this.scene.sound.play(SoundType.InvaderKilled, { volume: AudioBalance.gains[SoundType.InvaderKilled] })
     }
     // Remove from play immediately; the scene destroys it after overlap iteration.
     this.disableBody(true, true);

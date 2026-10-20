@@ -14,8 +14,8 @@ export const BananaSettings = {
     displayWidth: 36 * 1.5,
     // Keep the original landing bounds independent of flying-sprite size.
     landingInset: 12,
-    visualScale: 1,
-    hitRadius: 48,
+    visualScale: 1.6875,
+    hitRadius: 48 * 1.6875,
     damageDurationMs: 150
 };
 

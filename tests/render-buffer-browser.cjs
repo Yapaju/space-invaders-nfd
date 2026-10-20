@@ -84,6 +84,24 @@ async function serve(route) {
                         [v.x,v.y,v.scaleX,v.scaleY,v.texture && v.texture.key,v.body && [v.body.width,v.body.height,v.body.offset.x,v.body.offset.y]])
                         .sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
                     window.draw = () => { testGame.renderer.preRender(); s.sys.render(testGame.renderer); testGame.renderer.postRender(); };
+                    const pepe=s.alienManager.aliens.getChildren()[1];
+                    const geometry=()=>{
+                        const b=pepe.body;
+                        return JSON.stringify([pepe.x,pepe.y,pepe.width,pepe.height,pepe.scaleX,pepe.scaleY,
+                            pepe.originX,pepe.originY,b.left,b.top,b.width,b.height,b.offset.x,b.offset.y,
+                            b.velocity.x,b.velocity.y]);
+                    };
+                    pepe.body.preUpdate(false,0);
+                    const before=geometry();
+                    for(const direction of [-1,1,-1,1]) {
+                        pepe.setDirection(direction);pepe.body.preUpdate(false,0);
+                        if(pepe.texture.key!==(direction<0?'pepe-left':'alien'))throw Error('PEPE directional texture');
+                        if(geometry()!==before)throw Error('PEPE reversal changed frame, transform or collision');
+                    }
+                    for(const key of ['pepe-left','alien']) {
+                        const t=s.textures.get(key);
+                        if(t.source[0].width!==337 || t.source[0].height!==282)throw Error('PEPE prepared frame');
+                    }
                     draw();
                     const region = v => { const b=v.getBounds(); return {x:b.x,y:b.y,width:b.width,height:b.height}; };
                     const gl=testGame.renderer.gl,debug=gl.getExtension('WEBGL_debug_renderer_info');
@@ -121,6 +139,12 @@ async function serve(route) {
                     },{factor,width,height});
                     assert.equal(await page.evaluate(()=>snapshot()),state.geometry,'resize moved scene');
                 }
+                if(mode==='2x') for(const direction of [-1,1]) {
+                    await page.evaluate(direction=>{
+                        s.alienManager.aliens.getChildren().filter(v=>v.enemyType==='pepe').forEach(v=>v.setDirection(direction));draw();
+                    },direction);
+                    await page.locator('canvas').screenshot({path:path.join(output,`pepe-${direction<0?'left':'right'}-dpr${dpr}.png`)});
+                }
                 pictures[mode] = await page.locator('canvas').screenshot({path:path.join(output,`${mode}-dpr${dpr}.png`)});
                 const performance = await page.evaluate(() => {
                     const gl=testGame.renderer.gl, samples=[], synchronized=[];
@@ -148,11 +172,11 @@ async function serve(route) {
                 await page.evaluate(()=>{s.bulletTime=-1;s._shipKeyboardHandler();const b=s.assetManager.bullets.getChildren().find(v=>v.active);if(!b||b.body.velocity.y!==-400)throw Error('shooting');});
                 await page.keyboard.up('Space');
                 const bossStages = [];
-                await page.evaluate(()=>{s.restart();s._startWojak();s.wojak.update(1500);for(let i=0;i<150;i++)s.wojak.hit();});
-                for (const [name,delta] of [['pump',1750],['launch',1200],['contact',1200],['push',1000],['pre-exit',999]]) {
+                await page.evaluate(()=>{s.restart();s.wave=10;s.scoreManager.setWave(10);s._startWojak();s.wojak.update(1500);for(let i=0;i<150;i++)s.wojak.hit();});
+                for (const [name,delta] of [['pump',2900],['launch',1200],['contact',1200],['push',1000],['pre-exit',999]]) {
                     bossStages.push(await page.evaluate(delta=>{
                         const b=s.wojak;if(b.update(delta))throw Error('premature completion');draw();
-                        if(b.completionElapsed>=4150 && Math.abs(b.godCandle.y+134*b.godCandle.scaleY-b.weaponGeometry().candles.y)>0.001)throw Error('contact');
+                        if(b.completionElapsed>=5300 && Math.abs(b.godCandle.y+134*b.godCandle.scaleY-b.weaponGeometry().candles.y)>0.001)throw Error('contact');
                         return snapshot();
                     },delta));
                     if (name==='pump' || name==='push') await page.locator('canvas').screenshot({path:path.join(output,`${mode}-dpr${dpr}-${name}.png`)});
@@ -162,8 +186,8 @@ async function serve(route) {
                 await page.evaluate(()=>{
                     const ship=s.wojak.sprite;s.update(s.time.now,1);
                     if(ship.active || ship.getBounds().bottom>=0 || s.state!=='waveTransition')throw Error('completion');
-                    s._startNextWave();if(s.wave!==2 || s.state!=='playing')throw Error('wave progression');
-                    for(const time of [1750,4150,5150,6149]){
+                    s._startNextWave();if(s.wave!==11 || s.state!=='playing')throw Error('wave progression');
+                    for(const time of [2900,5300,6300,7299]){
                         s.restart();s._startWojak();const b=s.wojak;b.update(1500);for(let i=0;i<150;i++)b.hit();b.update(time);s.restart();
                         if(b.sprite || b.godCandle || b.pumpCharacter)throw Error('restart cleanup');
                     }

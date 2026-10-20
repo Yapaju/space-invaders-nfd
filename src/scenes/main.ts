@@ -9,8 +9,8 @@ import { Kaboom } from "../interface/kaboom";
 import { EnemyBullet } from "../interface/enemy-bullet";
 import { ScoreManager } from "../interface/manager/score-manager";
 import { GameState } from "../interface/game-state";
-import { MemeSkins, SkinDefinition, PlayerPoses, preparePlayerPoses } from "../interface/skins";
-import { PonkePoses, PopcatPoses, prepareEnemySkins } from "../interface/enemy-skins";
+import { PlayerPoses, preparePlayerPoses } from "../interface/skins";
+import { PepePoses, PonkePoses, PopcatPoses, prepareEnemySkins } from "../interface/enemy-skins";
 import { EnemyType } from "../interface/enemy-type";
 import { BananaBombs } from "../interface/banana-bomb";
 import { DamageFeedback } from "../interface/damage-feedback";
@@ -21,6 +21,9 @@ import { WojakBoss, WojakAssets, WojakSettings, shouldStartWojakTest } from "../
 import { CandleAssets } from "../interface/wojak-candles";
 import { TearAsset } from "../interface/wojak-tears";
 import { PopcornAssets, PopcornSettings, preparePopcornSkins, firePopcatAttack } from "../interface/popcat-weapons";
+
+import { preloadPopcatAudio, installPopcatAudio, stopPopcatSounds } from "../interface/popcat-audio";
+import { AudioBalance, installAudioHeadroom } from '../interface/audio-balance';
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -70,14 +73,8 @@ export class MainScene extends Phaser.Scene {
         this.load.image(AssetType.ElonEscapeRight, "meme-skins/elon-ally-escape-right.png");
         this.load.image(AssetType.ElonEscapeLeft, "meme-skins/elon-ally-escape-left.png");
         GoldenUiAssets.forEach(asset => this.load.image(asset.key, asset.path));
-        Object.keys(MemeSkins).forEach(key => {
-            const skin = MemeSkins[key] as SkinDefinition;
-            if (skin.asset !== MemeSkins.Player.asset) {
-                this.load.image(skin.asset, skin.path);
-            }
-        });
         PlayerPoses.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
-        PonkePoses.concat(PopcatPoses).forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
+        PepePoses.concat(PonkePoses, PopcatPoses).forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         this.load.spritesheet(AssetType.Kaboom, "images/explode.png", {
             frameWidth: 128,
             frameHeight: 128,
@@ -88,6 +85,7 @@ export class MainScene extends Phaser.Scene {
         });
 
         this.sound.volume = 0.5;
+        preloadPopcatAudio(this);
         this.load.audio(SoundType.Shoot, "audio/shoot.wav");
         this.load.audio(SoundType.Kaboom, "audio/explosion.wav");
         this.load.audio(SoundType.InvaderKilled, "audio/invaderkilled.wav");
@@ -97,6 +95,8 @@ export class MainScene extends Phaser.Scene {
         preparePlayerPoses(this);
         prepareEnemySkins(this);
         preparePopcornSkins(this);
+        installPopcatAudio(this);
+        installAudioHeadroom(this);
         this.state = GameState.Playing;
         this.starfield = this.add
             .tileSprite(0, 0, 800, 600, AssetType.Starfield)
@@ -122,7 +122,12 @@ export class MainScene extends Phaser.Scene {
         this.alienManager.onDescent = count => {
             if (this.state === GameState.Playing) this.elonAlly.onDescent(count);
         };
+        this.events.on('pause', this._syncPlayerPose, this);
+        this.events.on('resume', this._syncPlayerPose, this);
         this.events.once('shutdown', () => {
+            stopPopcatSounds(this);
+            this.events.off('pause', this._syncPlayerPose, this);
+            this.events.off('resume', this._syncPlayerPose, this);
             this.bananaBombs.clear();
             this.elonAlly.clear();
             if (this.wojak) this.wojak.clear();
@@ -227,19 +232,21 @@ export class MainScene extends Phaser.Scene {
     private _shipKeyboardHandler() {
         let playerBody = this.player.body as Phaser.Physics.Arcade.Body;
         playerBody.setVelocity(0, 0);
-        let direction = 0;
         if (this.cursors.left.isDown) {
             playerBody.setVelocityX(-200);
-            direction = -1;
         } else if (this.cursors.right.isDown) {
             playerBody.setVelocityX(200);
-            direction = 1;
         }
-        Ship.setDirection(this.player, direction, this.time.now);
+        this._syncPlayerPose();
 
         if (this.fireKey.isDown) {
             this._fireBullet();
         }
+    }
+
+    private _syncPlayerPose() {
+        const direction = this.cursors.left.isDown ? -1 : this.cursors.right.isDown ? 1 : 0;
+        Ship.setDirection(this.player, direction, this.time.now, this.fireKey.isDown && this.playerShootingEnabled);
     }
 
     private _bulletHitAliens(bullet: Bullet, alien: Alien) {
@@ -295,7 +302,7 @@ export class MainScene extends Phaser.Scene {
             live.setActive(false).setVisible(false);
             if (this.damageFeedback) this.damageFeedback.show(live);
         }
-        this.sound.play(SoundType.Kaboom)
+        this.sound.play(SoundType.Kaboom, { volume: AudioBalance.gains[SoundType.Kaboom] })
         if (this.scoreManager.noMoreLives) {
             this._gameOver();
             this.pendingCleanup.push(() => this.assetManager.gameOver());
@@ -303,6 +310,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _gameOver() {
+        stopPopcatSounds(this);
         if (this.wojak) this.wojak.clear();
         if (this.rapidFire) this.rapidFire.clear();
         this.state = GameState.GameOver;
@@ -341,7 +349,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private get playerShootingEnabled() {
-        return (this.state === GameState.Playing ||
+        return !this.sys.isPaused() && (this.state === GameState.Playing ||
             (this.state === GameState.BossEncounter && this.wojak && this.wojak.shootingEnabled)) && this.player.active;
     }
 
@@ -396,6 +404,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     restart() {
+        stopPopcatSounds(this);
         if (this.wojak) this.wojak.clear();
         this.wojakCompleted = false;
         if (this.rapidFire) this.rapidFire.clear();

@@ -6,6 +6,7 @@ export const TearSettings = {
     // The 1536x1024 source points diagonally up/right. Rotate around the
     // droplet bulb so its circular Arcade body stays aligned at every angle.
     sourceWidth: 1536, sourceHeight: 1024, sourceLength: 1120, displayLength: 32,
+    visualScale: 0.7,
     bulbX: 650, bulbY: 650, tipX: 1240, tipY: 150, bodyRadius: 250,
     reactionTime: 500
 };
@@ -48,8 +49,12 @@ export class WojakTears {
                 if (!player.active) return;
             } else {
                 const art = sprite.getBounds();
-                if (art.right < bounds.left || art.left > bounds.right ||
-                    art.bottom < bounds.top || art.top > bounds.bottom) sprite.destroy();
+                // Keep the original offscreen lifetime despite the smaller art.
+                const scale = TearSettings.visualScale;
+                if (sprite.x + (art.right - sprite.x) / scale < bounds.left ||
+                    sprite.x + (art.left - sprite.x) / scale > bounds.right ||
+                    sprite.y + (art.bottom - sprite.y) / scale < bounds.top ||
+                    sprite.y + (art.top - sprite.y) / scale > bounds.bottom) sprite.destroy();
             }
         }
         this.flights = this.flights.filter(sprite => sprite.active);
@@ -76,10 +81,12 @@ export class WojakTears {
         const scale = settings.displayLength / settings.sourceLength;
         const sprite = this.scene.physics.add.sprite(emitter.x, emitter.y, TearAsset.asset)
             .setOrigin(settings.bulbX / settings.sourceWidth, settings.bulbY / settings.sourceHeight)
-            .setScale(scale).setDepth(6);
+            .setScale(scale * settings.visualScale).setDepth(6);
         const body = sprite.body as Phaser.Physics.Arcade.Body;
         body.allowGravity = false;
-        body.setCircle(settings.bodyRadius, settings.bulbX - settings.bodyRadius, settings.bulbY - settings.bodyRadius);
+        // Compensate source-space body size so visual scaling cannot shrink hits.
+        const radius = settings.bodyRadius / settings.visualScale;
+        body.setCircle(radius, settings.bulbX - radius, settings.bulbY - radius);
         // Same one-time target snapshot and speed as MainScene._enemyFires.
         // Arcade keeps this velocity; subsequent player/boss movement cannot home it.
         const angle = this.scene.physics.moveToObject(sprite, player, settings.speed) + offset * Math.PI / 180;
