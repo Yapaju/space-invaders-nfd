@@ -56,6 +56,12 @@ export class BananaBombs {
     private flights: Flight[] = [];
     private blasts: Blast[] = [];
 
+    // Read-only accounting for the director; trajectories/damage stay owned here.
+    get activeThreatCount(): number {
+        return this.flights.length + this.blasts.filter(blast => blast.sprite.active &&
+            !blast.hit && this.scene.time.now < blast.expiresAt).length;
+    }
+
     constructor(private scene: Phaser.Scene, private explosions: Phaser.Physics.Arcade.Group,
         private damagePlayer: () => void) {}
 

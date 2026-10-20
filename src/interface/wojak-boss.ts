@@ -2,6 +2,7 @@ import { AssetType } from './assets';
 import { WojakCandles } from './wojak-candles';
 import { WojakTears } from './wojak-tears';
 import { WojakCharts } from './wojak-charts';
+import { WaveDirectorConfig } from './wave-director';
 
 // Disabled by default; the production build additionally disallows this entry.
 export const WojakDevelopment = { startAtEncounter: false };
@@ -9,8 +10,8 @@ export function shouldStartWojakTest(development: boolean) {
     return development && WojakDevelopment.startAtEncounter;
 }
 
-// Encounter starts after this wave is cleared, before the next wave begins.
-export const WOJAK_TRIGGER_AFTER_WAVE = 10;
+// Compatibility reference for the first milestone / development shortcut.
+export const WOJAK_TRIGGER_AFTER_WAVE = WaveDirectorConfig.boss.interval;
 
 export const WojakSettings = {
     afterWave: WOJAK_TRIGGER_AFTER_WAVE,

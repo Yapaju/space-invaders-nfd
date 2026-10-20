@@ -78,11 +78,15 @@ async function serve(route) {
             for (let wave = 1; wave <= 31; wave++) {
                 s.alienManager.reset(wave);
                 const aliens = s.alienManager.aliens.getChildren();
-                const type = ['popcat','pepe','ponke'][(wave-1)%3];
-                check(aliens.length === 24 && aliens.every(a=>a.enemyType===type), `wave ${wave}`);
-                result.waves.push(type);
+                const plan = s.alienManager.configuration;
+                check(aliens.length === 24 && aliens.every((a,i)=>a.enemyType===plan.enemies[i]), `wave ${wave}`);
+                const introduction = {1:'pepe',2:'ponke',6:'popcat'}[wave];
+                if(introduction)check(aliens.every(a=>a.enemyType===introduction), `introduction ${wave}`);
+                else check(new Set(aliens.map(a=>a.enemyType)).size>=2, `mixed wave ${wave}`);
+                result.waves.push(plan.composition);
             }
             s.restart();
+            s.wave=6;s.scoreManager.setWave(6);s.alienManager.reset(6);
             const aliens = s.alienManager.aliens.getChildren();
             const a = aliens[0], b = aliens[1];
             const geometry = () => JSON.stringify([a.x,a.y,a.scaleX,a.scaleY,a.originX,a.originY,
@@ -151,7 +155,7 @@ async function serve(route) {
                 pose.asset).setDisplaySize(400,400*282/337));draw();
         });
         await page.screenshot({path:path.join(output,'popcat-four-poses.png')});
-        await page.evaluate(()=>{previews.forEach(v=>v.destroy());s.children.list.forEach(v=>v.setVisible&&v.setVisible(true));s.restart();draw();});
+        await page.evaluate(()=>{previews.forEach(v=>v.destroy());s.children.list.forEach(v=>v.setVisible&&v.setVisible(true));s.restart();s.wave=6;s.scoreManager.setWave(6);s.alienManager.reset(6);draw();});
         await page.screenshot({path:path.join(output,'popcat-formation.png')});
         assert.deepEqual(errors,[]);
         fs.writeFileSync(path.join(output,'popcat-measurements.json'),JSON.stringify(report,null,2));

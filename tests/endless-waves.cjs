@@ -119,7 +119,7 @@ const { getWaveConfiguration, FORMATION_COLUMNS, FORMATION_ROWS, INVADERS_PER_WA
 const { PepePoses, PonkePoses, PopcatPoses, InvaderCanvas, prepareEnemySkins } = load('src/interface/enemy-skins.ts');
 const { PopcatSettings } = load('src/interface/popcat-lights.ts');
 const { PopcornSettings, PopcornAssets, PopcornProjectile, firePopcatAttack, popcatMouthPosition } = load('src/interface/popcat-weapons.ts');
-const expectedWaveType = wave => [EnemyType.Popcat, EnemyType.Pepe, EnemyType.Ponke][(wave - 1) % 3];
+const {WaveDirectorConfig, firingIntervalForWave} = load('src/interface/wave-director.ts');
 const expectedEnemyTexture = (type, left = false) => type === EnemyType.Popcat ?
     `popcat-${left ? 'left' : 'right'}` : type === EnemyType.Ponke ?
     `ponke-${left ? 'left' : 'right'}` : left ? 'pepe-left' : 'alien';
@@ -322,7 +322,8 @@ for (const pose of PepePoses.concat(PonkePoses, PopcatPoses)) {
 for (const wave of [1, 2, 3, 4, 5, 6, 7, 8, 99, 100, 999, 1000]) {
     const config = getWaveConfiguration(wave);
     assert.equal(config.enemies.length, 24);
-    assert(config.enemies.every(type => type === expectedWaveType(wave)));
+    assert(config.enemies.every(type => config.unlocked.includes(type)));
+    assert.equal(new Set(config.enemies).size, config.introduction ? 1 : Math.min(3, config.composition.length));
 }
 
 // Use the installed Phaser Body to verify scaled offsets and no post-update drift.
@@ -563,9 +564,9 @@ drive(2740, true, false, 'ship-turn-left');  // Releasing right does not restart
 drive(2753, true, false, 'ship-left');
 drive(2850, false, false, 'ship');
 
-// These normal-wave regressions isolate progression after the one-off boss.
+// These normal-wave regressions isolate ordinary transition handling.
 const scene = new MainScene();
-scene.wojakCompleted = true;
+scene.completedBossWave = 10;
 scene.state = GameState.Playing;
 scene.player = new Sprite(scene);
 scene.starfield = { tilePositionY: 0 };
@@ -755,7 +756,7 @@ assert.equal(score.waveLabel, 'WAVE 2');
 assert.equal(score.message, '', 'hide the centered announcement on spawn');
 assert.equal(scene.alienManager.lastWave, 2);
 assert.equal(alive, 24);
-assert.equal(scene.firingTimer, 3800);
+assert.equal(scene.firingTimer, 1800 + firingIntervalForWave(2));
 assert.equal(transitionBullets.length, 4, 'holding Space resumes firing on the spawn frame');
 assert.equal(scene.player.velocityX, 200);
 assert.equal(clearCount, 0);
@@ -880,7 +881,7 @@ const assertInside = () => survivors().forEach(alien => {
     near(alien.collisionY, alien.y);
 });
 assert.equal(survivors().length, 24);
-assert(survivors().every(alien => alien.enemyType === EnemyType.Popcat && alien.texture.key === 'popcat-right'));
+assert(survivors().every(alien => alien.enemyType === EnemyType.Pepe && alien.texture.key === 'alien'));
 assert.equal(FORMATION_COLUMNS, 6); assert.equal(FORMATION_ROWS, 4);
 assert.equal(INVADERS_PER_WAVE, 24); assert.equal(formation.aliens.maxSize, 24);
 assert.equal(formation.columnSpacing, 88);
@@ -893,7 +894,7 @@ function assertFormationFits() {
         near(alien.scaleX, alien.scaleY);
         assert(alien.getBounds().left >= -1e-7 && alien.getBounds().right <= 800 + 1e-7);
         if (i % FORMATION_COLUMNS < FORMATION_COLUMNS - 1) {
-            near(aliens[i + 1].x - alien.x, 88);
+            assert(aliens[i + 1].x - alien.x >= 88 - 1e-7);
             assert(alien.getBounds().right <= aliens[i + 1].getBounds().left + 1e-7);
         }
         if (i < FORMATION_COLUMNS * (FORMATION_ROWS - 1)) {
@@ -927,7 +928,7 @@ assertInside();
 // Reach the right edge using the current skin's visual bounds.
 const rightTravel = 800 - fullFormationBounds.right;
 formation.update((rightTravel - 100) * 10, 10000);
-assert(survivors().every(alien => alien.texture.key === 'popcat-left'), 'switch at the right edge immediately');
+assert(survivors().every(alien => alien.texture.key === 'pepe-left'), 'switch at the right edge immediately');
 survivors().forEach((alien, i) => {
     near(alien.x, originalPositions[i][0] + rightTravel);
     near(alien.y, originalPositions[i][1] + descent);
@@ -977,7 +978,7 @@ near(lone.x, 800 - halfWidth); near(lone.y, 100 + descent);
 // Step infinitesimally past arrival to avoid decimal round-off stopping a
 // synthetic frame just short of the boundary; movement assertions allow 1e-7px.
 formation.update((800 - halfWidth * 2) * 10 / 1.5 + 1e-8, 10000);
-assert.equal(lone.texture.key, 'popcat-right', 'switch at the left edge immediately');
+assert.equal(lone.texture.key, 'alien', 'switch at the left edge immediately');
 near(lone.x, halfWidth); near(lone.y, 100 + descent * 2);
 assert.equal(formation.direction, 1);
 formation.update(10, 10000);
@@ -986,22 +987,21 @@ assertInside();
 // Resetting from leftward movement starts the next configured wave facing right.
 for (const wave of [2, 3, 4, 5, 99, 100]) {
     formation.reset(wave);
-    const expectedType = expectedWaveType(wave);
-    const expectedTexture = expectedEnemyTexture(expectedType);
+    const expectedTypes = getWaveConfiguration(wave).enemies;
     assert.equal(survivors().length, 24);
-    assert(survivors().every(alien => alien.enemyType === expectedType && alien.texture.key === expectedTexture));
+    assert(survivors().every((alien,i) => alien.enemyType === expectedTypes[i] && alien.texture.key === expectedEnemyTexture(expectedTypes[i])));
     assertFormationFits();
     near((initialBounds().left + initialBounds().right) / 2, 400);
-    formation.update(rightTravel / formation.speed * 1000 + 1e-8, 10000);
+    formation.update((800-initialBounds().right) / formation.speed * 1000 + 1e-8, 10000);
     assert.equal(formation.direction, -1);
-    assert(survivors().every(alien => alien.texture.key === expectedEnemyTexture(expectedType, true)));
+    assert(survivors().every((alien,i) => alien.texture.key === expectedEnemyTexture(expectedTypes[i], true)));
     near(initialBounds().right, 800);
     assertFormationFits();
-    const fullSweep = 800 - (fullFormationBounds.right - fullFormationBounds.left);
+    const fullSweep = 800 - (initialBounds().right - initialBounds().left);
     formation.update(fullSweep / formation.speed * 1000 + 1e-8, 10000);
     near(initialBounds().left, 0);
     assert.equal(formation.direction, 1);
-    assert(survivors().every(alien => alien.texture.key === expectedTexture));
+    assert(survivors().every((alien,i) => alien.texture.key === expectedEnemyTexture(expectedTypes[i])));
     assertFormationFits();
     near(survivors()[0].y, originalPositions[0][1] + 2 * 25);
 }
@@ -1041,7 +1041,7 @@ for (const type of [EnemyType.Popcat, EnemyType.Ponke, EnemyType.Pepe]) {
     attackScene.player = new Sprite(attackScene, 400, 500, 'ship');
     attackScene.alienManager = { getRandomAliveEnemy: () => typedAlien };
     const projectile = new EnemyBullet(attackScene);
-    let redShots = 0, bananaLaunch;
+    let redShots = 0, bananaLaunch, bananaLaunches=0;
     const cornShots = [];
     attackScene.add = { existing(shot) {
         shot.width = shot.height = 128;
@@ -1049,7 +1049,8 @@ for (const type of [EnemyType.Popcat, EnemyType.Ponke, EnemyType.Pepe]) {
     } };
     attackScene.assetManager = { enemyBullets: { get: () => { redShots++; return projectile; },
         add: shot => cornShots.push(shot) } };
-    attackScene.bananaBombs = { launch(...args) { bananaLaunch = args; } };
+    attackScene.bananaBombs = { activeThreatCount:0, launch(...args) { bananaLaunch = args; bananaLaunches++; } };
+    attackScene.assetManager.enemyBullets.countActive=()=>0;
     let aim;
     attackScene.physics = { world: { bounds: {left:0,right:800,top:0,bottom:600} }, moveToObject(bullet, target, speed) { aim = { bullet, target, speed }; } };
     attackScene._enemyFires();
@@ -1068,7 +1069,22 @@ for (const type of [EnemyType.Popcat, EnemyType.Ponke, EnemyType.Pepe]) {
         assert.strictEqual(aim.bullet, projectile); assert.strictEqual(aim.target, attackScene.player);
         assert.equal(aim.speed, 120);
     }
-    assert.equal(attackScene.firingTimer, 5000);
+    assert.equal(attackScene.firingTimer, 3000+firingIntervalForWave(1));
+
+    // The director grants whole attacks; it never truncates a shotgun or
+    // changes any weapon's damage, aim, branch probability or speed.
+    const cost=WaveDirectorConfig.firing.projectileCost[type];
+    const beforeCount=redShots+cornShots.length+bananaLaunches;
+    attackScene.wave=100;
+    attackScene.assetManager.enemyBullets.countActive=()=>15-cost;
+    attackScene.bananaBombs.activeThreatCount=1;
+    attackScene._enemyFires();
+    assert.equal(redShots+cornShots.length+bananaLaunches,beforeCount,'one over cap refuses whole attack');
+    assert.equal(attackScene.firingTimer,3250);
+    attackScene.bananaBombs.activeThreatCount=0;
+    attackScene._enemyFires();
+    near(attackScene.firingTimer,3000+firingIntervalForWave(100));
+    assert.equal(redShots+cornShots.length+bananaLaunches,beforeCount+cost);
 }
 // Per-invader mouth deadlines, static lights, reversal during a POP,
 // exact close boundary, and no callbacks/visual children left after removal.
@@ -1156,12 +1172,13 @@ console.log('PASS: Popcat independent 180ms mouth poses, directional changes, st
 console.log('PASS: Popcorn exact 80/20 boundary, five-shot fan/two variants, one kernel, mirrored launch, descending Y=322 transform once, 140ms growth/180ms warning, 12/6/62.4px bodies and four-edge cleanup.');
 // Frame splitting does not change the result, even when crossing several edges.
 formation.reset(1000);
-const expectedReversals = 1 + Math.floor((formation.speed * 10 - rightTravel) /
-    (800 - (fullFormationBounds.right - fullFormationBounds.left)));
+const latePositions=survivors().map(alien=>[alien.x,alien.y]), lateBounds=initialBounds();
+const expectedReversals = 1 + Math.floor((formation.speed * 10 - (800-lateBounds.right)) /
+    (800 - (lateBounds.right - lateBounds.left)));
 formation.update(10000, 10000);
 assertInside();
 survivors().forEach(alien => near(alien.y,
-    originalPositions[formation.aliens.getChildren().indexOf(alien)][1] + descent * expectedReversals));
+    latePositions[formation.aliens.getChildren().indexOf(alien)][1] + descent * expectedReversals));
 const longFrame = survivors().map(alien => [alien.x, alien.y]);
 formation.reset(1000);
 for (let i = 0; i < 100; i++) formation.update(100, 10000);
@@ -1169,15 +1186,15 @@ survivors().forEach((alien, i) => {
     near(alien.x, longFrame[i][0]); near(alien.y, longFrame[i][1]);
 });
 assertInside();
-[1, 2, 1000].forEach(wave => {
+[1, 2, 100].forEach(wave => {
     formation.reset(wave);
     const x = survivors()[0].x;
     formation.update(100, 10000);
-    near(survivors()[0].x - x, 200 / (Math.max(600, 2000 / (1 + 0.10 * (wave - 1))) / 1000) * 0.1);
+    near(survivors()[0].x - x, getWaveConfiguration(wave).movementSpeed * 0.1);
 });
 // Check every survivor count against the wave's starting speed, including the cap.
-[1, 2, 1000].forEach(wave => {
-    const baseSpeed = 200 / (Math.max(600, 2000 / (1 + 0.10 * (wave - 1))) / 1000);
+[1, 2, 100].forEach(wave => {
+    const baseSpeed = getWaveConfiguration(wave).movementSpeed;
     let previousSpeed = 0;
     for (let count = INVADERS_PER_WAVE; count >= 1; count--) {
         formation.reset(wave);
@@ -1202,7 +1219,7 @@ assertInside();
     // Starting another wave resets survivor acceleration to its normal speed.
     formation.reset(wave + 1);
     const x = survivors()[0].x;
-    const nextWaveSpeed = 200 / (Math.max(600, 2000 / (1 + 0.10 * wave)) / 1000);
+    const nextWaveSpeed = getWaveConfiguration(wave + 1).movementSpeed;
     formation.update(100, 10000);
     near(survivors()[0].x - x, nextWaveSpeed * 0.1);
 });
@@ -1369,6 +1386,7 @@ function dogeAt(x, y = 500) {
 }
 dogeAt(400);
 bombs.launch(200, 150, doge.x, doge.y);
+assert.equal(bombs.activeThreatCount,1,'in-flight banana consumes one director threat slot');
 const flight = bombs.flights[0];
 assert.equal(flight.sprite.texture.key, 'ponke-banana');
 near(flight.sprite.width * flight.sprite.scaleX, 36 * 1.5);
@@ -1386,6 +1404,7 @@ dogeAt(700);
 bombScene.time.now = 1000 + arc.duration * 1000 + 1;
 bombs.update(doge);
 assert(flight.sprite.destroyed); assert.equal(bombs.flights.length, 0);
+assert.equal(bombs.activeThreatCount,1,'flight becomes one damaging blast, not two threats');
 const blast = blastSprites[0];
 assert.equal(blast.animationKey, 'ponke-explosion', 'only banana landing selects the yellow animation');
 near(blast.x, 400); near(blast.y, 500);
@@ -1398,6 +1417,7 @@ dogeAt(492); // Body starts 82px away: just outside the enlarged radius.
 bombs.update(doge); assert.equal(bombHits, 0);
 dogeAt(490); // Body starts 80px away: newly included area damages DOGE.
 bombs.update(doge); assert.equal(bombHits, 1);
+assert.equal(bombs.activeThreatCount,0,'spent blast releases its director threat slot');
 for (let i = 0; i < 10; i++) bombs.update(doge);
 assert.equal(bombHits, 1, 'each explosion can damage at most once');
 assert.equal(blastGroup.get().scaleX, 1, 'other explosions retain original size');
@@ -1593,7 +1613,7 @@ feedback.destroy();
 
 // Use the real lives initialization/reset/recovery code and transition method.
 const recoveryScene = new MainScene();
-recoveryScene.wojakCompleted = true; // Isolate ordinary new-wave life recovery.
+recoveryScene.completedBossWave = 10; // Isolate ordinary new-wave life recovery.
 recoveryScene.game = { canvas: { width: 800, height: 600 } };
 recoveryScene.scale = { gameSize: { width: 800, height: 600 } };
 recoveryScene.add = { image: (x, y, key) => uiImage(recoveryScene, x, y, key) };
@@ -3087,8 +3107,8 @@ assert.equal(encounterAnnouncement, 'WAVE 11'); encounter._startNextWave(); asse
 encounterShots.filter(shot => shot.active).forEach(shot => { shot.y = -37; shot.update(); });
 encounter._startNextWave(); encounter._startNextWave();
 assert.equal(encounter.wave, 11); assert.equal(encounterHudWave, 11); assert.deepEqual(encounterWaves, [2,3,4,5,6,7,8,9,10,11]);
-assert.equal(encounterInvaders.length, 24); assert(encounterInvaders.every(type => type === EnemyType.Pepe));
-assert.equal(encounterLifeRecoveries, 1); assert.equal(encounterLives, 3); assert(encounter.wojakCompleted);
+assert.equal(encounterInvaders.length, 24); assert.deepEqual(encounterInvaders,getWaveConfiguration(11).enemies);
+assert.equal(encounterLifeRecoveries, 1); assert.equal(encounterLives, 3); assert.equal(encounter.completedBossWave,10);
 assert(encounter.rapidFire.active); assert.equal(encounter.state, GameState.Playing);
 const spritesAfterEncounter = wojakSprites.length;
 for (let nextWave = 12; nextWave <= 20; nextWave++) {
@@ -3098,13 +3118,38 @@ for (let nextWave = 12; nextWave <= 20; nextWave++) {
     assert.equal(encounter.wave, nextWave); assert.equal(encounterHudWave, nextWave);
     assert.equal(encounter.state, GameState.Playing);
     assert.equal(encounter.wojak.sprite, undefined);
-    assert.equal(wojakSprites.length, spritesAfterEncounter, 'no second boss in later waves');
+    assert.equal(wojakSprites.length, spritesAfterEncounter, 'no second boss before clearing the next milestone');
     assert.equal(encounterInvaders.length, 24);
-    assert(encounterInvaders.every(type => type === expectedWaveType(nextWave)));
+    assert.deepEqual(encounterInvaders,getWaveConfiguration(nextWave).enemies);
 }
 assert.deepEqual(encounterWaves, Array.from({length:19},(_,i)=>i+2),'no skipped or duplicate waves through Wave 20');
+for(const milestone of [20,30]) {
+    assert.equal(encounter.wave,milestone);
+    const spritesBefore=wojakSprites.length;
+    encounter._bulletHitAliens(new Sprite(encounter),{active:true,kill(){},destroy(){}});
+    const cleanup=encounter.pendingCleanup;encounter.pendingCleanup=[];cleanup.forEach(fn=>fn());
+    assert.equal(encounterAnnouncement,'','boss milestone hides next regular-wave announcement');
+    stepEncounter(1499);assert.equal(encounter.state,GameState.WaveTransition);
+    stepEncounter(1);assert.equal(encounter.state,GameState.BossEncounter);
+    assert.equal(encounter.wave,milestone);assert.equal(encounterHudWave,milestone);
+    const boss=encounter.wojak.sprite;assert(wojakSprites.length>spritesBefore);
+    encounter._startNextWave();encounter._startWojak();assert.strictEqual(encounter.wojak.sprite,boss);
+    stepEncounter(1500);for(let hit=0;hit<150;hit++)assert(encounter.wojak.hit());
+    stepEncounter(10000);assert.equal(encounter.state,GameState.WaveTransition);
+    assert.equal(encounter.completedBossWave,milestone);assert.equal(encounter.wave,milestone);
+    encounter._startWojak();assert.equal(encounter.wojak.sprite,undefined,'completed milestone cannot respawn boss');
+    encounter._startNextWave();encounter._startNextWave();
+    assert.equal(encounter.wave,milestone+1);assert.equal(encounterHudWave,milestone+1);
+    assert.equal(encounter.state,GameState.Playing);
+    if(milestone===20)for(let next=22;next<=30;next++){
+        encounter._bulletHitAliens(new Sprite(encounter),{active:true,kill(){},destroy(){}});
+        const cleanup=encounter.pendingCleanup;encounter.pendingCleanup=[];cleanup.forEach(fn=>fn());
+        stepEncounter(1500);encounter._startNextWave();assert.equal(encounter.wave,next);
+    }
+}
+assert.deepEqual(encounterWaves,Array.from({length:30},(_,i)=>i+2),'bosses after 10/20/30 preserve every regular wave through 31');
 for (const phase of [WojakPhase.Entrance, WojakPhase.Patrol, WojakPhase.Complete]) {
-    encounter.wave = WOJAK_TRIGGER_AFTER_WAVE; encounter._startWojak();
+    encounter.wave = WOJAK_TRIGGER_AFTER_WAVE; encounter.completedBossWave=0; encounter._startWojak();
     if (phase !== WojakPhase.Entrance) encounter.wojak.update(1500);
     if (phase === WojakPhase.Complete) for (let hit = 0; hit < 150; hit++) encounter.wojak.hit();
     if (phase === WojakPhase.Patrol) {
@@ -3115,7 +3160,7 @@ for (const phase of [WojakPhase.Entrance, WojakPhase.Patrol, WojakPhase.Complete
     const layers = [encounter.wojak.character, encounter.wojak.foreground, encounter.wojak.percentage, encounter.wojak.lighting];
     encounter._gameOver(); assert(sprite.destroyed); assert(layers.every(layer => layer.destroyed)); assert.equal(encounter.wojak.phase, WojakPhase.Removed);
     encounter.restart(); assert.equal(encounter.wave, 1); assert.equal(encounterLives, 3);
-    assert.equal(encounter.wojakCompleted, false); assert.equal(encounter.wojak.sprite, undefined);
+    assert.equal(encounter.completedBossWave, 0); assert.equal(encounter.wojak.sprite, undefined);
     assert.equal(encounter.rapidFire.active, false); stepEncounter(2000);
     assert.equal(encounter.state, GameState.Playing); assert.equal(encounter.wojak.sprite, undefined);
 }
@@ -3130,7 +3175,7 @@ console.log('PASS: banana selection, fixed arcs, explosion-only damage, radius/w
 console.log('PASS: shared DOGE feedback, damage gates, PEPE impact removal, directional tint, pulse coalescing, HUD life accounting, GAME OVER and shutdown cleanup.');
 console.log('PASS: capped new-wave life recovery (1 to 2, 2 to 3, 3 to 3), immediate HUD, transition gates, no duplicates or revival, initial Wave 1 and restart.');
 console.log('PASS: fixed HUD slots [1,2,3] -> [2,3] -> [3] -> [2,3] -> [1,2,3], zero lives and restart; lost leftmost icon retains damage flash.');
-console.log('PASS: approved DOGE size/margins/edge limits unchanged; centered 6x4 alternating waves, exact 1.30x invader sizing and proportional bodies, no overlap, unchanged speeds/25px descent and canvas boundaries.');
+console.log('PASS: approved DOGE size/margins/edge limits unchanged; centered 6x4 seeded mixed waves, exact 1.30x invader sizing and proportional bodies, no overlap, compounded cycle speed/25px descent and canvas boundaries.');
 console.log('PASS: flying banana 36x24 -> 54x36 (+50%), unchanged launch/arc/rotation including edge landings, 68.75% larger yellow explosion and damage radius than baseline, unchanged window and explosion-only damage.');
 console.log('PASS: golden HUD assets, digit reuse/cleanup/alignment, centered single-line multi-digit announcements, enlarged fixed life slots, single GAME OVER image, explicit overlay depths and restart/shutdown cleanup.');
 console.log('PASS: preserved production preset: Waves 1-2 exclusion, one 30% wave roll, 50/50 direction, weighted descent spawn with no timers, off-screen entry/exit, no physics and lifecycle cancellation.');

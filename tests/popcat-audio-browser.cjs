@@ -126,7 +126,8 @@ async function serve(route) {
     }
     clear();const important=manager.add('shoot');important.play();
     for(let i=0;i<3;i++)fire(1,false,400,aliens[i]);
-    check(s.assetManager.enemyBullets.getLength()===15,'all simultaneous attacks still fire');
+    check(s.assetManager.enemyBullets.getLength()===15,'three whole shotguns fit the director budget');
+    check(!audio.playPopcatSound(s),'audio pool independently caps a third overlapping pop');
     check(popEvents.length===2,'global two-voice cap');
     check(important.isPlaying,'important player sound not interrupted');
     audio.stopPopcatSounds(s);check(important.isPlaying,'cleanup affects only Popcat');important.stop();

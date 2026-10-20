@@ -162,7 +162,12 @@ async function serve(route) {
             },{width,height});
             for (const ms of [2000,2649,2650,2800,2900,3899,4000,4350]) {
                 await page.evaluate(({ms,width,height}) => {
-                    s.restart(); s._startWojak();
+                    // Regular waves keep their fixed logical playfield. Only
+                    // the boss-overlay fixture uses the synthetic narrow world.
+                    s.physics.world.setBounds(0,0,800,600);
+                    s.restart();
+                    s.physics.world.setBounds(0,0,width,height);
+                    s._startWojak();
                     const b=s.wojak;b.update(1500);b.sprite.x=[205,400,595][ms%3];for(let i=0;i<150;i++)b.hit();b.update(ms);
                     const c=b.pumpCharacter,p=b.pumpBubble;
                     if(p) {
@@ -180,6 +185,7 @@ async function serve(route) {
             }
         }
         await page.evaluate(() => {
+            s.physics.world.setBounds(0,0,800,600);
             for(const action of ['restart','_gameOver']) for(const ms of [0,1000,2000,2649,2650,2800,2900,3899,4000,4100,4350,4600,5300,6300,7299]) {
                 s.restart();s._startWojak();
                 const b=s.wojak;b.update(1500);for(let i=0;i<150;i++)b.hit();

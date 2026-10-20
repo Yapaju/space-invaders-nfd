@@ -142,7 +142,7 @@ async function serve(route) {
                     try{s._enemyFires();}finally{Phaser.Math.RND.frac=oldFrac;}
                     near(s.firingTimer-s.time.now,250,'bounded retry');s.firingTimer=Infinity;
                     shooter.setPosition(400,140);fire([0.79]);
-                    check(group.getLength()===5,'one volley after becoming eligible');near(lastFireDelay,2000,'normal cooldown');clear();
+                    check(group.getLength()===5,'one volley after becoming eligible');near(lastFireDelay,1610,'approved Wave 1 cooldown');clear();
                 }
                 let allowed=0,total=0;
                 for(const direction of [-1,1])for(let x=44;x<=756;x+=4){

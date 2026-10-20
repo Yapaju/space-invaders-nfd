@@ -1,22 +1,24 @@
 import { Alien } from "../alien";
-import { getWaveConfiguration, FORMATION_COLUMNS, FORMATION_ROWS, INVADERS_PER_WAVE, FORMATION_START_Y, FORMATION_ROW_SPACING } from "../wave-config";
+import { getWaveConfiguration, INVADERS_PER_WAVE, WaveConfiguration } from "../wave-config";
+import { WaveDirectorConfig } from '../wave-director';
 
 export class AlienManager {
     aliens: Phaser.Physics.Arcade.Group;
     // Minimum whole-pixel spacing for the enlarged 87.36 x 73.10px frames.
-    readonly columnSpacing = 88;
-    readonly rowSpacing = FORMATION_ROW_SPACING;
+    readonly columnSpacing = WaveDirectorConfig.formation.columnSpacing;
+    readonly rowSpacing = WaveDirectorConfig.formation.rowSpacing;
+    configuration: WaveConfiguration;
     readonly descentStep = 25;
     descentCount = 0;
     onDescent: (count: number) => void;
     private direction = 1;
     private movementStopped = false;
-    private speed = 100;
+    private speed = WaveDirectorConfig.movement.regularSpeed;
     get hasAliveAliens(): boolean {
         return this.aliens.countActive(true) > 0;
     }
 
-    constructor(private _scene: Phaser.Scene) {
+    constructor(private _scene: Phaser.Scene, private seed = WaveDirectorConfig.seed) {
         this.aliens = this._scene.physics.add.group({
             maxSize: INVADERS_PER_WAVE,
             classType: Alien,
@@ -40,9 +42,7 @@ export class AlienManager {
         this.direction = 1;
         this.descentCount = 0;
         this._sortAliens(wave);
-        const duration = Math.max(600, 2000 / (1 + 0.10 * (wave - 1)));
-        // Preserve v0.1's speed: 200 pixels over the scaled duration.
-        this.speed = 200 / (duration / 1000);
+        this.speed = this.configuration.movementSpeed;
         this.movementStopped = false;
     }
 
@@ -105,17 +105,13 @@ export class AlienManager {
 
     private _sortAliens(wave = 1) {
         const bounds = this._scene.physics.world.bounds;
-        const ORIGIN_X = (bounds.left + bounds.right) / 2 - (FORMATION_COLUMNS - 1) * this.columnSpacing / 2;
-        const ORIGIN_Y = FORMATION_START_Y;
-        const config = getWaveConfiguration(wave);
+        const config = this.configuration = getWaveConfiguration(wave, this.seed, bounds);
         this.aliens.clear(true, true);
-        for (let y = 0; y < FORMATION_ROWS; y++) {
-            for (let x = 0; x < FORMATION_COLUMNS; x++) {
-                let alien: Alien = this.aliens.create(ORIGIN_X + x * this.columnSpacing, ORIGIN_Y + y * this.rowSpacing);
-                alien.configure(config.enemies[y * FORMATION_COLUMNS + x], this.direction);
-                alien.setImmovable(false);
-            }
-        }
+        config.slots.forEach((slot, index) => {
+            const alien: Alien = this.aliens.create(slot.x, slot.y);
+            alien.configure(config.enemies[index], this.direction);
+            alien.setImmovable(false);
+        });
     }
 
 }
