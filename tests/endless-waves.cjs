@@ -122,6 +122,8 @@ const { PopcornSettings, PopcornAssets, PopcornProjectile, firePopcatAttack, pop
 const {WaveDirectorConfig, firingIntervalForWave} = load('src/interface/wave-director.ts');
 // Preserve full normal-wave regression coverage independently of forced Premium testing.
 WaveDirectorConfig.premiumInvaders.testMode.enabled=false;
+// Historical rectangular gap/row fixtures; both live layouts are covered by the director browser suite.
+WaveDirectorConfig.formation.choices=['grid'];
 const expectedEnemyTexture = (type, left = false) => type === EnemyType.Popcat ?
     `popcat-${left ? 'left' : 'right'}` : type === EnemyType.Ponke ?
     `ponke-${left ? 'left' : 'right'}` : left ? 'pepe-left' : 'alien';
@@ -135,6 +137,12 @@ const uiDimensions = new Map(GoldenUiAssets.map(asset => {
     const png = fs.readFileSync(path.resolve(__dirname, '../assets', asset.path));
     return [asset.key, [png.readUInt32BE(16), png.readUInt32BE(20)]];
 }));
+// Precomposed Flex Card instruction texture for the minimal UI scene fixture.
+uiDimensions.set('nfd-flex-card-instruction-v1', [Math.ceil(Array.from('ENTER FOR FLEX CARD', letter => {
+    if (letter === ' ') return 36;
+    const png = fs.readFileSync(path.resolve(__dirname, `../assets/font/nfd-font-${letter}.png`));
+    return png.readUInt32BE(16) / png.readUInt32BE(20) * 100;
+}).reduce((sum, width) => sum + width, 0)), 100]);
 const uiImages = [];
 function uiImage(scene, x, y, key) {
     assert(uiDimensions.has(key), `missing UI texture ${key}`);
@@ -580,6 +588,7 @@ scene.time = {
 const score = Object.create(ScoreManager.prototype);
 Object.assign(score, {
     score: 0, highScore: 0, remaining: 3,
+    flexCardInstruction: { setVisible() {} },
     scoreText: { setText() {} }, waveText: { setText(text) { score.waveLabel = `WAVE ${text}`; } },
     waveAnnouncement: {
         setText(text) { score.message = `WAVE ${text}`; return this; },
@@ -875,6 +884,14 @@ const formationScene = {
     tweens: { add() { assert.fail('formation must not use independent tweens'); } }
 };
 const formation = new AlienManager(formationScene);
+// Keep the historical right-edge fixtures explicit; seeded starts are checked below.
+const faceRightForBoundaryFixture = () => {
+    formation.direction = 1;
+    formation.aliens.getChildren().forEach(alien => alien.setDirection(1));
+};
+assert.equal(formation.direction, getWaveConfiguration(1).initialDirection, 'constructor initializes Wave 1');
+assert(formation.aliens.getChildren().every(a => a.direction === formation.direction));
+faceRightForBoundaryFixture();
 const near = (actual, expected) => assert(Math.abs(actual - expected) < 1e-7, `${actual} != ${expected}`);
 const survivors = () => formation.aliens.getChildren().filter(alien => alien.active);
 const assertInside = () => survivors().forEach(alien => {
@@ -943,6 +960,7 @@ survivors().forEach((alien, i) => {
 assertInside();
 // Empty outer columns change the next boundary, without repacking survivors.
 formation.reset();
+faceRightForBoundaryFixture();
 formation.aliens.getChildren().forEach((alien, i) => {
     if (i % FORMATION_COLUMNS === 0 || i % FORMATION_COLUMNS === FORMATION_COLUMNS - 1) alien.active = false;
 });
@@ -960,6 +978,7 @@ survivors().forEach((alien, i) => {
 });
 // Empty rows stay empty, and gaps inside the formation remain unchanged.
 formation.reset();
+faceRightForBoundaryFixture();
 formation.aliens.getChildren().forEach((alien, i) => {
     if (i < FORMATION_COLUMNS || (i >= 2 * FORMATION_COLUMNS && i < 3 * FORMATION_COLUMNS) || i % FORMATION_COLUMNS === 4) alien.active = false;
 });
@@ -972,6 +991,7 @@ survivors().forEach((alien, i) => {
 });
 // A lone survivor traverses the playable width minus its visual width.
 formation.reset();
+faceRightForBoundaryFixture();
 formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
 const lone = survivors()[0];
 const halfWidth = lone.width * lone.scaleX / 2;
@@ -986,27 +1006,34 @@ assert.equal(formation.direction, 1);
 formation.update(10, 10000);
 near(lone.x, halfWidth + 1.5); near(lone.y, 100 + descent * 2);
 assertInside();
-// Resetting from leftward movement starts the next configured wave facing right.
-for (const wave of [2, 3, 4, 5, 99, 100]) {
+// Each reset selects the wave's direction, regardless of the previous bounce.
+const startingDirections = new Set();
+for (const wave of [1, 2, 3, 4, 5, 99, 100]) {
     formation.reset(wave);
-    const expectedTypes = getWaveConfiguration(wave).enemies;
+    const plan = getWaveConfiguration(wave), expectedTypes = plan.enemies, direction = plan.initialDirection;
+    startingDirections.add(direction);
+    assert.equal(formation.direction, direction);
     assert.equal(survivors().length, 24);
-    assert(survivors().every((alien,i) => alien.enemyType === expectedTypes[i] && alien.texture.key === expectedEnemyTexture(expectedTypes[i])));
+    assert(survivors().every((alien,i) => alien.enemyType === expectedTypes[i] && alien.texture.key === expectedEnemyTexture(expectedTypes[i], direction < 0)));
     assertFormationFits();
     near((initialBounds().left + initialBounds().right) / 2, 400);
-    formation.update((800-initialBounds().right) / formation.speed * 1000 + 1e-8, 10000);
-    assert.equal(formation.direction, -1);
-    assert(survivors().every((alien,i) => alien.texture.key === expectedEnemyTexture(expectedTypes[i], true)));
-    near(initialBounds().right, 800);
+    const firstTravel = direction > 0 ? 800-initialBounds().right : initialBounds().left;
+    formation.update(firstTravel / formation.speed * 1000 + 1e-8, 10000);
+    assert.equal(formation.direction, -direction);
+    assert(survivors().every((alien,i) => alien.texture.key === expectedEnemyTexture(expectedTypes[i], direction > 0)));
+    near(direction > 0 ? initialBounds().right : initialBounds().left, direction > 0 ? 800 : 0);
+    assert.equal(formation.descentCount, 1);
     assertFormationFits();
     const fullSweep = 800 - (initialBounds().right - initialBounds().left);
     formation.update(fullSweep / formation.speed * 1000 + 1e-8, 10000);
-    near(initialBounds().left, 0);
-    assert.equal(formation.direction, 1);
-    assert(survivors().every((alien,i) => alien.texture.key === expectedEnemyTexture(expectedTypes[i])));
+    near(direction > 0 ? initialBounds().left : initialBounds().right, direction > 0 ? 0 : 800);
+    assert.equal(formation.direction, direction);
+    assert(survivors().every((alien,i) => alien.texture.key === expectedEnemyTexture(expectedTypes[i], direction < 0)));
+    assert.equal(formation.descentCount, 2);
     assertFormationFits();
     near(survivors()[0].y, originalPositions[0][1] + 2 * 25);
 }
+assert.equal(startingDirections.size, 2, 'both initial directions bounce and descend twice');
 // The visual change cannot alter origin, scale, collision geometry or velocity.
 const typedAlien = new Alien({}, 250, 200);
 typedAlien.angle = 0;
@@ -1175,7 +1202,8 @@ console.log('PASS: Popcorn exact 80/20 boundary, five-shot fan/two variants, one
 // Frame splitting does not change the result, even when crossing several edges.
 formation.reset(1000);
 const latePositions=survivors().map(alien=>[alien.x,alien.y]), lateBounds=initialBounds();
-const expectedReversals = 1 + Math.floor((formation.speed * 10 - (800-lateBounds.right)) /
+const lateFirstTravel = formation.direction > 0 ? 800-lateBounds.right : lateBounds.left;
+const expectedReversals = 1 + Math.floor((formation.speed * 10 - lateFirstTravel) /
     (800 - (lateBounds.right - lateBounds.left)));
 formation.update(10000, 10000);
 assertInside();
@@ -1192,7 +1220,7 @@ assertInside();
     formation.reset(wave);
     const x = survivors()[0].x;
     formation.update(100, 10000);
-    near(survivors()[0].x - x, getWaveConfiguration(wave).movementSpeed * 0.1);
+    near(survivors()[0].x - x, getWaveConfiguration(wave).initialDirection * getWaveConfiguration(wave).movementSpeed * 0.1);
 });
 // Check every survivor count against the wave's starting speed, including the cap.
 [1, 2, 100].forEach(wave => {
@@ -1203,19 +1231,19 @@ assertInside();
         formation.aliens.getChildren().forEach((alien, i) => { alien.active = i < count; });
         const before = survivors().map(alien => [alien.x, alien.y]);
         formation.update(100, 10000);
-        const measuredSpeed = (survivors()[0].x - before[0][0]) / 0.1;
+        const measuredSpeed = (survivors()[0].x - before[0][0]) / 0.1 * formation.configuration.initialDirection;
         near(measuredSpeed, baseSpeed * (1 + 0.5 * (INVADERS_PER_WAVE - count) / (INVADERS_PER_WAVE - 1)));
         assert(measuredSpeed >= previousSpeed - 1e-7);
         assert(measuredSpeed <= baseSpeed * 1.5 + 1e-7);
         if (count === INVADERS_PER_WAVE) near(measuredSpeed, baseSpeed);
         if (count === 1) near(measuredSpeed, baseSpeed * 1.5);
         survivors().forEach((alien, i) => {
-            near(alien.x - before[i][0], measuredSpeed * 0.1);
+            near(alien.x - before[i][0], formation.configuration.initialDirection * measuredSpeed * 0.1);
             near(alien.y, before[i][1]);
         });
         // Repeated updates must not compound the multiplier.
         formation.update(100, 10000);
-        near(survivors()[0].x - before[0][0], measuredSpeed * 0.2);
+        near(survivors()[0].x - before[0][0], formation.configuration.initialDirection * measuredSpeed * 0.2);
         previousSpeed = measuredSpeed;
     }
     // Starting another wave resets survivor acceleration to its normal speed.
@@ -1223,10 +1251,11 @@ assertInside();
     const x = survivors()[0].x;
     const nextWaveSpeed = getWaveConfiguration(wave + 1).movementSpeed;
     formation.update(100, 10000);
-    near(survivors()[0].x - x, nextWaveSpeed * 0.1);
+    near(survivors()[0].x - x, formation.configuration.initialDirection * nextWaveSpeed * 0.1);
 });
 // Changing survivor count mid-flight retains current positions and leftward direction.
 formation.reset();
+faceRightForBoundaryFixture();
 formation.update(rightTravel * 10, 10000);
 formation.aliens.getChildren().forEach((alien, i) => { alien.active = i % 2 === 0; });
 const acceleratingPositions = survivors().map(alien => [alien.x, alien.y]);
@@ -1248,7 +1277,7 @@ survivors().forEach((alien, i) => {
     near(alien.x, stoppedPositions[i][0]); near(alien.y, stoppedPositions[i][1]);
 });
 formation.reset();
-assert.equal(formation.direction, 1);
+assert.equal(formation.direction, getWaveConfiguration(1).initialDirection);
 assert.equal(formation.movementStopped, false);
 assert.equal(formation.speed, 100);
 assert.equal(survivors().length, 24);
@@ -1260,6 +1289,7 @@ assert.equal(formation.update(0, scene.player.getBounds().top), true);
 assert.equal(formation.movementStopped, true);
 formation.reset();
 // Inactive invaders cannot cause invasion. Reaching the line needs no horizontal overlap.
+faceRightForBoundaryFixture();
 formation.aliens.getChildren().forEach((alien, i) => { alien.active = i === 0; });
 formation.aliens.getChildren()[1].y = 1000;
 const invader = survivors()[0];
@@ -1289,7 +1319,9 @@ assert.equal(scene.wave, 1);
 assert.equal(score.score, 0);
 assert.equal(score.remaining, 3);
 assert.equal(survivors().length, 24);
-assert.equal(formation.direction, 1);
+assert.equal(formation.direction, getWaveConfiguration(1).initialDirection, 'restart reinitializes Wave 1 direction');
+assert(survivors().every(a => a.direction === formation.direction), 'restart resets every invader facing');
+assert.equal(formation.descentCount, 0);
 assert.equal(formation.movementStopped, false);
 assert.equal(score.message, '');
 
@@ -1618,6 +1650,7 @@ const recoveryScene = new MainScene();
 recoveryScene.completedBossWave = 10; // Isolate ordinary new-wave life recovery.
 recoveryScene.game = { canvas: { width: 800, height: 600 } };
 recoveryScene.scale = { gameSize: { width: 800, height: 600 } };
+recoveryScene.textures = { exists: key => uiDimensions.has(key) };
 recoveryScene.add = { image: (x, y, key) => uiImage(recoveryScene, x, y, key) };
 let uiShutdownListeners = [];
 recoveryScene.events = {
@@ -1947,7 +1980,9 @@ allyFormation.onDescent = count => {
     assert.equal(!!descentAlly.sprite, count >= 2, 'ally appears in the exact second descent callback');
 };
 allyFormation.reset(3); descentAlly.startWave(3);
-const startTravel = 800 - Math.max(...allyFormation.aliens.getChildren().map(alien => alien.getBounds().right));
+const startTravel = allyFormation.direction > 0 ?
+    800 - Math.max(...allyFormation.aliens.getChildren().map(alien => alien.getBounds().right)) :
+    Math.min(...allyFormation.aliens.getChildren().map(alien => alien.getBounds().left));
 const travelAcross = 800 - 527.36;
 allyFormation.update((startTravel + travelAcross * 2) / allyFormation.speed * 1000 + 1e-8, 10000);
 assert.deepEqual(descentEvents, [1, 2, 3], 'one event per formation step, not per invader');
@@ -1965,6 +2000,7 @@ assert.equal(allyGameOver.state, GameState.GameOver);
 // A fatal second descent counts as movement, but must not spawn a doomed ally
 // before the scene applies its unchanged invasion GAME OVER handling.
 allyFormation.reset(3); descentAlly.startWave(3);
+allyGameOver.state = GameState.Playing;
 const fatalDescentEvents = [];
 allyFormation.onDescent = count => { fatalDescentEvents.push(count); descentAlly.onDescent(count); };
 allyFormation.update(startTravel / allyFormation.speed * 1000 + 1e-8, 10000);

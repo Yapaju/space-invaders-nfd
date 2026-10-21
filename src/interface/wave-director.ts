@@ -1,5 +1,16 @@
 import { EnemyType } from './enemy-type';
 
+export type Formation = 'grid' | 'diamond' | 'TWIN_SQUADS' | 'SNAKE';
+export interface WaveMovementGroup {
+    id: string;
+    slots: number[];
+    bounds: { left: number; right: number };
+    initialDirection: -1 | 1;
+    squad?: 'left' | 'right';
+    row?: number;
+}
+export interface WaveSquad extends WaveMovementGroup { id: 'left' | 'right'; }
+
 export const WaveDirectorConfig = {
     seed: 0x4e464431,
     introductions: [
@@ -14,6 +25,10 @@ export const WaveDirectorConfig = {
     boss: { interval: 10, type: 'wojak' },
     formation: {
         columns: 6, rows: 4, startY: 100, columnSpacing: 88, rowSpacing: 74,
+        choices: ['grid', 'diamond', 'TWIN_SQUADS', 'SNAKE'] as Formation[],
+        diamond: { rowCounts: [2, 4, 6, 6, 4, 2] },
+        twinSquads: { columns: 4, rows: 3, descentIntervalMs: 4000, descentPixels: 25 },
+        snake: { staggerColumns: 0.5 },
         // Current invader frames are 87.36 x 73.10 world pixels.
         maxEnemies: 24
     },
@@ -45,11 +60,14 @@ export interface WavePlan {
     unlocked: EnemyType[];
     composition: EnemyType[];
     enemies: EnemyType[];
-    formation: string;
+    formation: Formation;
     slots: { x: number; y: number }[];
+    squads?: WaveSquad[];
+    rowGroups?: WaveMovementGroup[];
     speedMultiplier: number;
     baselineMultiplier: number;
     movementSpeed: number;
+    initialDirection: -1 | 1;
     firingIntervalMs: number;
     bossAfter: boolean;
 }
@@ -100,6 +118,12 @@ function weighted<T>(values: T[], weight: (value: T) => number, random: () => nu
     return values[values.length - 1];
 }
 
+// Equal index intervals for the enabled formations; no rounded percentage remainder.
+export function formationFromRoll(roll: number): Formation {
+    const choices = WaveDirectorConfig.formation.choices;
+    return choices[Math.floor(roll * choices.length)];
+}
+
 export function getWavePlan(wave: number, seed = WaveDirectorConfig.seed,
     bounds = { left: 0, right: 800 }): WavePlan {
     if (!Number.isSafeInteger(wave) || wave < 1) throw new Error('Wave must be a positive safe integer');
@@ -125,16 +149,30 @@ export function getWavePlan(wave: number, seed = WaveDirectorConfig.seed,
         }, 1), random);
     }
     const f = config.formation;
-    if (f.columns * f.rows > f.maxEnemies) throw new Error('Formation exceeds configured enemy cap');
-    if (f.columns * f.columnSpacing > bounds.right - bounds.left)
+    // Separate stream: adding a layout never shifts direction/composition/Premium rolls.
+    const formation = formationFromRoll(randomForWave(seed ^ 0x464f524d, wave)());
+    const rowCounts = formation === 'diamond' ? f.diamond.rowCounts : Array(f.rows).fill(f.columns);
+    const twin = f.twinSquads, midpoint = (bounds.left + bounds.right) / 2;
+    const slotCount = formation === 'TWIN_SQUADS' ? 2 * twin.columns * twin.rows :
+        rowCounts.reduce((sum, count) => sum + count, 0);
+    if (slotCount > f.maxEnemies)
+        throw new Error('Formation exceeds configured enemy cap');
+    const stagger = formation === 'SNAKE' ? f.columnSpacing * f.snake.staggerColumns : 0;
+    if (formation === 'TWIN_SQUADS' ? twin.columns * f.columnSpacing > (bounds.right - bounds.left) / 2 :
+        Math.max(...rowCounts) * f.columnSpacing + stagger > bounds.right - bounds.left)
         throw new Error('Formation cannot fit playable bounds');
-    // Original AlienManager origin and complete row-by-row rectangular grid.
-    // Only enemy types are randomized; geometry is identical on every wave.
-    const originX = (bounds.left + bounds.right) / 2 - (f.columns - 1) * f.columnSpacing / 2;
     const slots: { x: number; y: number }[] = [];
-    for (let row = 0; row < f.rows; row++) for (let column = 0; column < f.columns; column++) {
-        slots.push({ x: originX + column * f.columnSpacing, y: f.startY + row * f.rowSpacing });
-    }
+    const addRows = (counts: number[], centerX: number) => counts.forEach((count, row) => {
+        // Classic retains its exact original origin/spacing and row-major slot order.
+        const offset = formation === 'SNAKE' ? (row % 2 ? stagger / 2 : -stagger / 2) : 0;
+        const originX = centerX + offset - (count - 1) * f.columnSpacing / 2;
+        for (let column = 0; column < count; column++)
+            slots.push({ x: originX + column * f.columnSpacing, y: f.startY + row * f.rowSpacing });
+    });
+    if (formation === 'TWIN_SQUADS') {
+        addRows(Array(twin.rows).fill(twin.columns), (bounds.left + midpoint) / 2);
+        addRows(Array(twin.rows).fill(twin.columns), (midpoint + bounds.right) / 2);
+    } else addRows(rowCounts, midpoint);
     // Balanced slot counts avoid an accidentally overwhelming all-but-one mix.
     const enemies = slots.map((_, index) => composition[index % composition.length]);
     seededShuffle(enemies, random);
@@ -145,8 +183,29 @@ export function getWavePlan(wave: number, seed = WaveDirectorConfig.seed,
     const movementSpeed = config.movement.regularSpeed * baselineMultiplier * speedMultiplier;
     // No balancing cap: reject numeric overflow rather than passing Infinity to movement.
     if (!Number.isFinite(movementSpeed)) throw new RangeError('Wave speed exceeds finite Number range');
+    // Isolate direction from composition, Premium planning and Phaser's live RNG.
+    const initialDirection = randomForWave(seed ^ 0x444952, wave)() < 0.5 ? -1 : 1;
+    const squadSize = twin.columns * twin.rows;
+    const squads: WaveSquad[] = formation === 'TWIN_SQUADS' ? [
+        { id: 'left', slots: slots.slice(0, squadSize).map((_, i) => i),
+            bounds: { left: bounds.left, right: bounds.right }, initialDirection },
+        { id: 'right', slots: slots.slice(squadSize).map((_, i) => i + squadSize),
+            bounds: { left: bounds.left, right: bounds.right }, initialDirection: initialDirection === 1 ? -1 : 1 }
+    ] : undefined;
+    const rowGroups: WaveMovementGroup[] = formation === 'SNAKE' ? rowCounts.map((count, row) => ({
+        id: `row-${row + 1}`, slots: slots.map((_, i) => i).slice(row * f.columns, row * f.columns + count),
+        bounds: { left: bounds.left, right: bounds.right },
+        initialDirection: row % 2 ? (initialDirection === 1 ? -1 : 1) : initialDirection
+    })) : squads ? squads.reduce<WaveMovementGroup[]>((groups, squad) => groups.concat(
+        Array.from({ length: twin.rows }, (_, row) => ({
+            id: `${squad.id}-row-${row + 1}`, squad: squad.id, row,
+            slots: squad.slots.slice(row * twin.columns, (row + 1) * twin.columns),
+            bounds: { ...squad.bounds }, initialDirection: squad.initialDirection
+        }))), []) : undefined;
     return { wave, seed, chapter: Math.floor((wave - 1) / config.movement.multipliers.length) + 1,
-        introduction: !!introduction, unlocked, composition, enemies, formation: 'grid', slots,
-        speedMultiplier, baselineMultiplier, movementSpeed,
+        introduction: !!introduction, unlocked, composition, enemies, formation, slots,
+        ...(squads ? { squads } : {}),
+        ...(rowGroups ? { rowGroups } : {}),
+        speedMultiplier, baselineMultiplier, movementSpeed, initialDirection,
         firingIntervalMs: firingIntervalForWave(wave), bossAfter: isBossMilestone(wave) };
 }

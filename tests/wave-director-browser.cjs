@@ -93,6 +93,20 @@ async function serve(route) {
     s._gameOver();check(s.firingTimer===Infinity,'game over invalidates deadline');
     s.update(undefined,0);check(permissions===1,'game over suppresses firing');
     s._enemyFires=actualFire;s.restart();near(s.firingTimer-s.time.now,1610,'restart uses first-cycle timer');
+    // Restart must discard a previous direction/stop/descent, for either Wave 1 choice.
+    for(const direction of [-1,1]){
+     let seed=0;while(d.getWavePlan(1,seed).initialDirection!==direction||d.getWavePlan(1,seed).squads||d.getWavePlan(1,seed).rowGroups)seed++;
+     const m=s.alienManager;m.seed=seed;m.reset(20);m.direction=-direction;m.descentCount=9;m.stopMovement();
+     s.restart();
+     check(s.wave===1&&m.direction===direction&&!m.movementStopped&&m.descentCount===0,'restart initializes chosen Wave 1 direction');
+     const aliens=m.aliens.getChildren(),positions=aliens.map(a=>({x:a.x,y:a.y}));
+     check(aliens.every(a=>a.direction===direction),'restart shares facing across formation');
+     const rng=Phaser.Math.RND.state();m.update(100,10000);
+     check(Phaser.Math.RND.state()===rng,'horizontal movement does not draw live RNG');
+     aliens.forEach((a,i)=>{near(a.x-positions[i].x,direction*10,'Wave 1 movement sign');near(a.y,positions[i].y,'no initial descent');});
+     const resetRng=Phaser.Math.RND.state();m.reset();check(Phaser.Math.RND.state()===resetRng,'wave direction initialization does not draw live RNG');
+    }
+    s.alienManager.seed=12345;s.restart();
     const plans=[];
     for(const wave of [...Array.from({length:20},(_,i)=>i+1),21,30,50,100]) {
      s.alienManager.reset(wave);
@@ -101,24 +115,66 @@ async function serve(route) {
      check(plan.seed===12345,'runtime query seed');
      check(JSON.stringify(plan)===JSON.stringify(d.getWavePlan(wave,12345)),'actual spawn uses seeded plan');
      check(aliens.length===24,'standard count');
-     check(plan.formation==='grid','all waves use original rectangular formation');
+     check(['grid','diamond','TWIN_SQUADS','SNAKE'].includes(plan.formation),'regular wave selects supported layout');
      near(plan.movementSpeed,100*Math.pow(1.02,Math.floor((wave-1)/5))*[1,1.1,1.25,1.4,1.5][(wave-1)%5],'specified compounded speed');
      aliens.forEach((alien,i)=>{check(alien.enemyType===plan.enemies[i],'actual enemy type');
       near(alien.x,plan.slots[i].x,'slot x');near(alien.y,plan.slots[i].y,'slot y');
-      near(alien.x,180+(i%6)*88,'original column position');
-      near(alien.y,100+Math.floor(i/6)*74,'original row position');
+      if(plan.formation==='grid'){
+       near(alien.x,180+(i%6)*88,'original column position');
+       near(alien.y,100+Math.floor(i/6)*74,'original row position');
+      }
       const a=alien.getBounds();check(a.left>=0&&a.right<=800&&a.top>=0&&a.bottom<600,'formation inside playfield');
       aliens.slice(i+1).forEach(other=>{const b=other.getBounds();
        check(a.right<=b.left||a.left>=b.right||a.bottom<=b.top||a.top>=b.bottom,'visible frames do not overlap');});
      });
      const frames=aliens.map(alien=>alien.getBounds());
-     near(Math.max(...frames.map(b=>b.right))-Math.min(...frames.map(b=>b.left)),527.36,'original overall width');
-     near(Math.max(...frames.map(b=>b.bottom))-Math.min(...frames.map(b=>b.top)),222+87.36*282/337,'original overall height');
-     const x=aliens[0].x;s.alienManager.update(100,10000);near(aliens[0].x-x,plan.movementSpeed*.1,'compounded RS cycle');
+     near(Math.max(...frames.map(b=>b.right))-Math.min(...frames.map(b=>b.left)),plan.squads?751.36:plan.rowGroups?571.36:527.36,'selected overall width');
+     near(Math.max(...frames.map(b=>b.bottom))-Math.min(...frames.map(b=>b.top)),(plan.formation==='diamond'?370:plan.squads?148:222)+87.36*282/337,'selected overall height');
+     check(s.alienManager.direction===plan.initialDirection,'formation starts in planned direction');
+     check(aliens.every((a,i)=>a.direction===((plan.squads||plan.rowGroups)?(plan.squads||plan.rowGroups).find(g=>g.slots.includes(i)).initialDirection:plan.initialDirection)),'each movement group shares starting direction');
+     const x=aliens[0].x;s.alienManager.update(100,10000);near(aliens[0].x-x,plan.initialDirection*plan.movementSpeed*.1,'compounded RS cycle');
      for(let frame=0;frame<120;frame++)s.alienManager.update(16,10000);
      aliens.forEach(a=>check(a.getBounds().left>=-1e-6&&a.getBounds().right<=800+1e-6,'boundary reversals'));
      plans.push({wave,formation:plan.formation,types:plan.composition,speed:plan.movementSpeed,interval:plan.firingIntervalMs});
     }
+    const layouts=[];
+    for(const formation of ['grid','diamond'])for(const direction of [-1,1]){
+     const m=s.alienManager;let seed=0;
+     while(d.getWavePlan(1,seed).formation!==formation||d.getWavePlan(1,seed).initialDirection!==direction)seed++;
+     m.seed=seed;s.restart();const roots=m.aliens.getChildren();
+     const box=()=>({left:Math.min(...m.aliens.getChildren().filter(a=>a.active).map(a=>a.getBounds().left)),right:Math.max(...m.aliens.getChildren().filter(a=>a.active).map(a=>a.getBounds().right))});
+     check(!m.update(0,s.player.body.top),'layout spawns above actual player defensive line');
+     const rows=[...new Set(roots.map(a=>a.y))];
+     check(JSON.stringify(rows.map(y=>roots.filter(a=>a.y===y).length))===JSON.stringify(formation==='diamond'?[2,4,6,6,4,2]:[6,6,6,6]),'actual row counts');
+     rows.forEach(y=>near(roots.filter(a=>a.y===y).reduce((sum,a)=>sum+a.x,0)/roots.filter(a=>a.y===y).length,400,'each row centered'));
+     const before=roots.map(a=>({x:a.x,y:a.y}));m.update(100,10000);
+     roots.forEach((a,i)=>{near(a.x-before[i].x,direction*10,'coordinated initial motion');near(a.y,before[i].y,'no spontaneous descent');});
+     const travel=direction>0?800-box().right:box().left;
+     m.update(travel/100*1000+1e-7,10000);
+     check(m.direction===-direction&&m.descentCount===1,'first edge reverses and descends once');
+     roots.forEach((a,i)=>near(a.y,before[i].y+25,'first descent'));
+     near(direction>0?box().right:box().left,direction>0?800:0,'actual first boundary');
+     m.update((800-(box().right-box().left))/100*1000+1e-7,10000);
+     check(m.direction===direction&&m.descentCount===2,'opposite edge reverses and descends once');
+     roots.forEach((a,i)=>near(a.y,before[i].y+50,'second descent'));
+     // Remove the occupied extremes: the next edge uses living artwork, not a 6x4 envelope.
+     m.reset();const full=box();m.aliens.getChildren().forEach(a=>{if(Math.abs(a.getBounds().left-full.left)<1e-6||Math.abs(a.getBounds().right-full.right)<1e-6)a.disableBody(true,true);});
+     check(box().right-box().left<full.right-full.left,'sparse bounds shrink');
+     const alive=m.aliens.countActive(true),speed=100*(1+.5*(24-alive)/23),sparseTravel=direction>0?800-box().right:box().left;
+     m.update(sparseTravel/speed*1000+1e-7,10000);
+     near(direction>0?box().right:box().left,direction>0?800:0,'sparse formation reaches occupied boundary');
+     check(m.direction===-direction&&m.descentCount===1,'sparse edge bounces once');
+     // Existing scheduler, scoring and complete-wave path on each actual layout.
+     s.restart();m.stopMovement();s._enemyFires();
+     check(s.assetManager.enemyBullets.countActive(true)===1,'one original Pepe attack');
+     const oldScore=s.scoreManager.score;
+     m.aliens.getChildren().slice().forEach(a=>{const bullet=s.assetManager.bullets.get();bullet.enableBody(true,a.body.center.x,a.body.center.y,true,true);bullet.body.preUpdate(false,0);check(s.physics.overlap([bullet],[a],s._bulletHitAliens,null,s),'actual Arcade regular kill');const cleanup=s.pendingCleanup;s.pendingCleanup=[];cleanup.forEach(f=>f());});
+     near(s.scoreManager.score-oldScore,1240,'24 regular rewards plus unchanged clear bonus');
+     check(s.invadersKilled===24&&s.state==='waveTransition'&&!m.hasAliveAliens,'normal wave completion');
+     s.time.now=s.nextWaveReadyAt;s._startNextWave();check(s.wave===2&&s.state==='playing'&&m.aliens.countActive(true)===24,'next regular wave spawns once');
+     layouts.push({formation,direction,seed,rows:rows.length});
+    }
+    s.alienManager.seed=12345;
     s.restart();s.wave=100;s.alienManager.stopMovement();
     const group=s.assetManager.enemyBullets,shooter=s.alienManager.aliens.getChildren()[0];
     shooter.configure('popcat',1);shooter.setPosition(400,140);shooter.body.preUpdate(false,0);
@@ -156,12 +212,16 @@ async function serve(route) {
     }
     s.restart();s.wave=4;s.scoreManager.setWave(4);s.alienManager.reset(4);s.alienManager.stopMovement();s.firingTimer=Infinity;
     testGame.renderer.preRender();s.sys.render(testGame.renderer);testGame.renderer.postRender();
-    return {renderer:testGame.renderer.type,plans,bosses,threatCap:15};
+    return {renderer:testGame.renderer.type,plans,layouts,bosses,threatCap:15};
    });
-   await page.screenshot({path:path.join(output,renderer+'-wave-4.png')});reports.push(report);
+   for(const formation of ['grid','diamond','TWIN_SQUADS','SNAKE']){
+    await page.evaluate(formation=>{const s=testGame.scene.scenes[0],d=load('src/interface/wave-director');let seed=0;while(d.getWavePlan(1,seed).formation!==formation)seed++;s.alienManager.seed=seed;s.restart();s.alienManager.stopMovement();testGame.renderer.preRender();s.sys.render(testGame.renderer);testGame.renderer.postRender();},formation);
+    await page.screenshot({path:path.join(output,renderer+'-'+formation+'.png')});
+   }
+   reports.push(report);
   }
   assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(output,'wave-director-browser.json'),JSON.stringify(reports,null,2));
-  console.log('PASS: real Phaser Canvas/WebGL seeded plans and safe formations through wave 100; compounded cycle speed, bullet/banana threat cap, whole shotguns, inactive cleanup, repeated bosses after 10/20/30 and exact next-wave numbering.');
+  console.log('PASS: Canvas/WebGL both layouts/directions, exact centered rows, occupied/sparse boundary bouncing/descent, real Arcade kills/scoring/firing/completion; original budgets, speed and repeated boss regressions.');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

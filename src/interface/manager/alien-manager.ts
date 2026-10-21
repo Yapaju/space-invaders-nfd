@@ -1,9 +1,16 @@
 import { Alien } from "../alien";
 import { getWaveConfiguration, INVADERS_PER_WAVE, WaveConfiguration } from "../wave-config";
-import { WaveDirectorConfig } from '../wave-director';
+import { WaveDirectorConfig, WaveMovementGroup } from '../wave-director';
 import { PremiumProgress, PremiumFormationPlan, planPremiumFormation } from '../premium-spawn';
 import { premiumInvaderOf } from '../premium-invader';
 import { createPremiumInvader } from '../premium-registry';
+
+interface GroupMovement extends WaveMovementGroup {
+    aliens: Alien[];
+    direction: number;
+    initialEntityCount: number;
+    bounceCount: number;
+}
 
 export class AlienManager {
     aliens: Phaser.Physics.Arcade.Group;
@@ -18,6 +25,10 @@ export class AlienManager {
     private movementStopped = false;
     private speed = WaveDirectorConfig.movement.regularSpeed;
     private initialEntityCount = INVADERS_PER_WAVE;
+    private rows: GroupMovement[] = [];
+    private twinDescentElapsedMs = 0;
+    private twinVerticalOffset = 0;
+    private twinSpawnY = new Map<Alien, number>();
     premiumPlan: PremiumFormationPlan;
     get hasAliveAliens(): boolean {
         return this.aliens.countActive(true) > 0;
@@ -45,7 +56,6 @@ export class AlienManager {
 
     reset(wave = 1) {
         this.stopMovement();
-        this.direction = 1;
         this.descentCount = 0;
         this._sortAliens(wave);
         this.speed = this.configuration.movementSpeed;
@@ -67,6 +77,8 @@ export class AlienManager {
             this.stopMovement();
             return true;
         }
+        if (this.configuration.formation === 'TWIN_SQUADS') return this._updateTwin(delta, defensiveLine);
+        if (this.configuration.formation === 'SNAKE') return this._updateMovingGroups(this.rows, delta, defensiveLine, true);
 
         const bounds = this._scene.physics.world.bounds;
         // Scale the wave's starting speed linearly from 1x at full strength to
@@ -99,11 +111,123 @@ export class AlienManager {
         return false;
     }
 
+    private _updateTwin(delta: number, defensiveLine: number): boolean {
+        const config = WaveDirectorConfig.formation.twinSquads;
+        let remaining = Math.max(0, delta);
+        while (remaining > 0) {
+            const untilDescent = config.descentIntervalMs - this.twinDescentElapsedMs;
+            const step = Math.min(remaining, untilDescent);
+            // Slice horizontal simulation at each timed descent, including fatal contacts.
+            if (this._updateMovingGroups(this.rows, step, defensiveLine, false)) return true;
+            this.twinDescentElapsedMs += step;
+            remaining = Math.max(0, remaining - step);
+            if (this.twinDescentElapsedMs + 1e-7 < config.descentIntervalMs) break;
+            this.twinDescentElapsedMs = 0;
+            this.twinVerticalOffset += config.descentPixels;
+            this.descentCount++;
+            const living = this.aliens.getChildren().filter(alien => alien.active) as Alien[];
+            // _move uses each original spawn Y plus the one authoritative Twin offset.
+            this._move(living, 0, 0);
+            if (living.some(alien => (alien.body as Phaser.Physics.Arcade.Body).bottom >= defensiveLine)) {
+                this.stopMovement();
+                return true;
+            }
+            if (this.onDescent) this.onDescent(this.descentCount);
+        }
+        return false;
+    }
+
+    private _groupBounds(aliens: Alien[]) {
+        return {
+            left: Math.min(...aliens.map(alien => Math.min(alien.getBounds().left,
+                (alien.body as Phaser.Physics.Arcade.Body).left))),
+            right: Math.max(...aliens.map(alien => Math.max(alien.getBounds().right,
+                (alien.body as Phaser.Physics.Arcade.Body).right)))
+        };
+    }
+
+    private _updateMovingGroups(groups: GroupMovement[], delta: number, defensiveLine: number,
+        snake: boolean): boolean {
+        const world = this._scene.physics.world.bounds;
+        let remaining = Math.max(0, delta) / 1000;
+        while (remaining > 0) {
+            // Original group order/identity persists after casualties and horizontal crossings.
+            const living = groups.map(group => ({ group, aliens: group.aliens.filter(alien => alien.active) }))
+                .filter(entry => entry.aliens.length > 0);
+            if (!living.length) break;
+            const velocities = living.map(({ group, aliens }) => {
+                const destroyed = (group.initialEntityCount - aliens.length) / Math.max(1, group.initialEntityCount - 1);
+                return group.direction * this.speed * (1 + 0.5 * Math.max(0, Math.min(1, destroyed)));
+            });
+            const walls = living.map(({ aliens }, i) => {
+                const bounds = this._groupBounds(aliens);
+                return Math.max(0, velocities[i] > 0 ? world.right - bounds.right : bounds.left - world.left) /
+                    Math.abs(velocities[i]);
+            });
+            const contacts: { first: number; second: number; time: number }[] = [];
+            if (!snake) for (let i = 0; i < living.length; i++) for (let j = i + 1; j < living.length; j++) {
+                const relative = velocities[i] - velocities[j];
+                if (!relative) continue;
+                let time = Infinity;
+                for (const a of living[i].aliens) for (const b of living[j].aliens) {
+                    const first = this._twinBounds(a), second = this._twinBounds(b);
+                    if (first.top >= second.bottom - 1e-7 || second.top >= first.bottom - 1e-7) continue;
+                    if (relative > 0 && first.right <= second.left + 1e-7)
+                        time = Math.min(time, Math.max(0, second.left - first.right) / relative);
+                    else if (relative < 0 && second.right <= first.left + 1e-7)
+                        time = Math.min(time, Math.max(0, first.left - second.right) / -relative);
+                }
+                if (Number.isFinite(time)) contacts.push({ first: i, second: j, time });
+            }
+            const contact = Math.min(Infinity, ...contacts.map(pair => pair.time));
+            const eventTime = Math.min(...walls, contact);
+            const step = Math.min(remaining, eventTime);
+            living.forEach(({ aliens }, i) => this._move(aliens, velocities[i] * step, 0));
+            remaining = Math.max(0, remaining - step);
+            if (step < eventTime) break;
+            // Coalesce simultaneous wall/contact events: each involved group reverses once.
+            const tolerance = 1e-7 / Math.max(1, ...velocities.map(Math.abs));
+            const colliding = contacts.filter(pair => Math.abs(pair.time - eventTime) <= tolerance);
+            const bounced = living.filter((entry, i) => Math.abs(walls[i] - eventTime) <= tolerance ||
+                colliding.some(pair => pair.first === i || pair.second === i));
+            const previousDescent = this.descentCount;
+            bounced.forEach(({ group, aliens }) => {
+                group.direction *= -1;
+                group.bounceCount++;
+                aliens.forEach(alien => alien.setDirection(group.direction));
+            });
+            if (snake) {
+                // First living entry is the uppermost ORIGINAL row, regardless of current Y.
+                if (bounced.indexOf(living[0]) >= 0) {
+                    living.forEach(({ aliens }) => this._move(aliens, 0, this.descentStep));
+                    this.descentCount++;
+                }
+            }
+            if (living.some(({ aliens }) => aliens.some(alien =>
+                (alien.body as Phaser.Physics.Arcade.Body).bottom >= defensiveLine))) {
+                this.stopMovement();
+                return true;
+            }
+            if (this.onDescent && this.descentCount > previousDescent) this.onDescent(this.descentCount);
+        }
+        return false;
+    }
+
+    // Owner-approved Twin clearance protects the complete sprite as well as its
+    // unchanged damage body. In particular, Premium never splits across rows.
+    private _twinBounds(alien: Alien) {
+        const frame = alien.getBounds(), body = alien.body as Phaser.Physics.Arcade.Body;
+        return { left: Math.min(frame.left, body.left), right: Math.max(frame.right, body.right),
+            top: Math.min(frame.top, body.top), bottom: Math.max(frame.bottom, body.bottom) };
+    }
+
     private _move(aliens: Alien[], x: number, y: number) {
         aliens.forEach(alien => {
             // Keep Arcade collision bounds in sync with the visible formation.
             const body = alien.body as Phaser.Physics.Arcade.Body;
-            body.reset(alien.x + x, alien.y + y);
+            const nextY = this.configuration.formation === 'TWIN_SQUADS' ?
+                this.twinSpawnY.get(alien) + this.twinVerticalOffset : alien.y + y;
+            body.reset(alien.x + x, nextY);
             // Phaser 3.22 reset() ignores custom offsets until preUpdate.
             body.preUpdate(false, 0);
             const premium = premiumInvaderOf(alien);
@@ -114,20 +238,36 @@ export class AlienManager {
     private _sortAliens(wave = 1) {
         const bounds = this._scene.physics.world.bounds;
         const config = this.configuration = getWaveConfiguration(wave, this.seed, bounds);
+        this.direction = config.initialDirection;
+        this.twinDescentElapsedMs = 0;
+        this.twinVerticalOffset = 0;
+        this.twinSpawnY.clear();
+        this.rows = (config.rowGroups || []).map(row => ({ ...row, aliens: [],
+            direction: row.initialDirection, initialEntityCount: 0, bounceCount: 0,
+            ...(config.formation === 'SNAKE' ? { descentCount: 0, pendingDescents: 0 } : {}) }));
+        const groups = this.rows;
         this.aliens.clear(true, true);
         this.premiumPlan = planPremiumFormation(config, this.progress);
         this.premiumPlan.regulars.forEach(entry => {
             const slot = config.slots[entry.slot];
             const alien: Alien = this.aliens.create(slot.x, slot.y);
-            alien.configure(entry.type, this.direction);
+            const squad = groups.find(group => group.slots.indexOf(entry.slot) >= 0);
+            alien.configure(entry.type, squad ? squad.direction : this.direction);
+            if (squad) squad.aliens.push(alien);
             alien.setImmovable(false);
         });
         this.premiumPlan.premiums.forEach(footprint => {
             const premium = createPremiumInvader(this._scene, footprint);
-            this.aliens.add(premium.spawn());
-            premium.setFormationDirection(this.direction);
+            const root = premium.spawn(), squad = this.rows.find(group =>
+                group.squad === footprint.squad && group.row === footprint.row);
+            this.aliens.add(root);
+            if (squad) squad.aliens.push(root);
+            premium.setFormationDirection(squad ? squad.direction : this.direction);
         });
+        if (config.formation === 'TWIN_SQUADS')
+            (this.aliens.getChildren() as Alien[]).forEach(alien => this.twinSpawnY.set(alien, alien.y));
         this.initialEntityCount = this.aliens.getChildren().length;
+        groups.forEach(squad => squad.initialEntityCount = squad.aliens.length);
     }
 
     updatePremiums(delta: number, player: Phaser.Physics.Arcade.Sprite, damage: () => void) {

@@ -25,6 +25,7 @@ export interface PremiumFootprint {
     y: number;
     width: number;
     height: number;
+    squad?: 'left' | 'right';
 }
 export interface PremiumFormationPlan {
     premiums: PremiumFootprint[];
@@ -32,6 +33,11 @@ export interface PremiumFormationPlan {
 }
 
 export function planPremiumFormation(plan: WavePlan, progress: PremiumProgress): PremiumFormationPlan {
+    // Owner-approved Snake exception: no cross-row Premium, including in forced debug mode.
+    // Unlock progress is retained; compatible formations keep their original 10% rolls.
+    if (plan.formation === 'SNAKE') return {
+        premiums: [], regulars: plan.enemies.map((type, slot) => ({ slot, type }))
+    };
     const config = WaveDirectorConfig.premiumInvaders, grid = WaveDirectorConfig.formation;
     // Reuse the director PRNG in a separate domain; base composition is untouched.
     const random = randomForWave(plan.seed ^ 0x5052454d, plan.wave);
@@ -43,19 +49,38 @@ export function planPremiumFormation(plan: WavePlan, progress: PremiumProgress):
         const forced = selected.findIndex(type => type.bossType === 'wojak');
         if (forced > 0) selected.unshift(selected.splice(forced, 1)[0]);
     }
+    // Build a separate occupied-cell lattice per squad; no footprint can bridge the gap.
+    const groups = plan.squads || [{ id: undefined, slots: plan.slots.map((_, index) => index) }];
     const candidates = selected.map(type => {
         const choices: PremiumFootprint[] = [];
-        for (let row = 0; row <= grid.rows - type.rows; row++) {
-            for (let column = 0; column <= grid.columns - type.columns; column++) {
-                const slots: number[] = [];
-                for (let dy = 0; dy < type.rows; dy++) for (let dx = 0; dx < type.columns; dx++)
-                    slots.push((row + dy) * grid.columns + column + dx);
-                const first = plan.slots[slots[0]], last = plan.slots[slots[slots.length - 1]];
-                choices.push({ ...type, row, column, slots, x: (first.x + last.x) / 2, y: (first.y + last.y) / 2,
-                    width: (type.columns - 1) * grid.columnSpacing + 87.36,
-                    height: (type.rows - 1) * grid.rowSpacing + 87.36 * 282 / 337 });
+        groups.forEach(group => {
+            const occupied = group.slots.map(index => plan.slots[index]);
+            const left = Math.min(...occupied.map(slot => slot.x)), top = Math.min(...occupied.map(slot => slot.y));
+            const columns = Math.round((Math.max(...occupied.map(slot => slot.x)) - left) / grid.columnSpacing) + 1;
+            const rows = Math.round((Math.max(...occupied.map(slot => slot.y)) - top) / grid.rowSpacing) + 1;
+            const cells: { [cell: string]: number } = {};
+            group.slots.forEach(index => {
+                const slot = plan.slots[index];
+                const column = Math.round((slot.x - left) / grid.columnSpacing);
+                const row = Math.round((slot.y - top) / grid.rowSpacing);
+                cells[`${row}:${column}`] = index;
+            });
+            for (let row = 0; row <= rows - type.rows; row++) {
+                // Diamond Premiums must be wholly inside its first three geometric rows.
+                if (plan.formation === 'diamond' && row + type.rows > 3) continue;
+                for (let column = 0; column <= columns - type.columns; column++) {
+                    const slots: number[] = [];
+                    for (let dy = 0; dy < type.rows; dy++) for (let dx = 0; dx < type.columns; dx++)
+                        slots.push(cells[`${row + dy}:${column + dx}`]);
+                    if (slots.some(slot => slot === undefined)) continue;
+                    const first = plan.slots[slots[0]], last = plan.slots[slots[slots.length - 1]];
+                    choices.push({ ...type, row, column, slots, x: (first.x + last.x) / 2, y: (first.y + last.y) / 2,
+                        width: (type.columns - 1) * grid.columnSpacing + 87.36,
+                        height: (type.rows - 1) * grid.rowSpacing + 87.36 * 282 / 337,
+                        ...(group.id ? { squad: group.id } : {}) });
+                }
             }
-        }
+        });
         return shuffle(choices, random);
     });
     // Maximize fitted count, not a one-Premium limit or a greedy placement that

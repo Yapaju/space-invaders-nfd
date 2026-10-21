@@ -123,6 +123,42 @@ async function serve(route) {
     s.restart();check(!s.premiumProgress.eligible('wojak',100)&&m.aliens.getChildren().length===24,'new run resets unlock');
     m.seed=12345;
     d.WaveDirectorConfig.premiumInvaders.testMode.enabled=true;
+    const footprintCoverage=[];
+    for(const formation of ['grid','diamond']){
+     const seen=new Set(),target=(formation==='diamond'?4:15)*2;
+     for(let seed=0;seed<10000&&seen.size<target;seed++){
+      const base=d.getWavePlan(14,seed);if(base.formation!==formation)continue;
+      const footprint=planner(base,s.premiumProgress).premiums[0],key=footprint.row+':'+footprint.column+':'+base.initialDirection;
+      if(seen.has(key))continue;seen.add(key);m.seed=seed;m.reset(14);
+      const roots=m.aliens.getChildren(),p=owner(),direction=base.initialDirection;
+      const noOverlap=()=>roots.forEach((a,i)=>{const b=a.getBounds();roots.slice(i+1).forEach(other=>{const o=other.getBounds();check(b.right<=o.left+1e-5||b.left>=o.right-1e-5||b.bottom<=o.top+1e-5||b.top>=o.bottom-1e-5,'Premium cannot overlap regulars in '+formation);});});
+      noOverlap();check(roots.length===21&&m.premiumPlan.regulars.length===20,'24 logical cells / 21 entities');
+      near(p.sprite.displayWidth,175.36,'unchanged Premium size');near(p.sprite.displayHeight,175.36*1024/1536,'unchanged Premium aspect');
+      const positions=roots.map(a=>({x:a.x,y:a.y}));
+      const left=Math.min(...roots.map(a=>a.getBounds().left)),right=Math.max(...roots.map(a=>a.getBounds().right));
+      const distance=direction>0?800-right:left;
+      m.update(distance/base.movementSpeed*1000+1e-7,10000);
+      check(m.direction===-direction&&m.descentCount===1,'actual occupied Premium formation edge bounces once');
+      roots.forEach((a,i)=>{near(a.x-positions[i].x,direction*distance,'all entities move together');near(a.y-positions[i].y,25,'all entities descend together');check(a.getBounds().left>=-1e-5&&a.getBounds().right<=800+1e-5,'actual frame remains inside bounds');});
+      check(roots.every(a=>(a.premium||a).direction===-direction),'all entities face bounce direction');noOverlap();
+     }
+     check(seen.size===target,'all valid '+formation+' footprints in both directions');
+     footprintCoverage.push({formation,positions:seen.size/2,directions:2});
+    }
+    for(const formation of ['grid','diamond']){
+     let seed=0;while(d.getWavePlan(1,seed).formation!==formation)seed++;
+     m.seed=seed;s.restart();m.stopMovement();const p=owner(),score=s.scoreManager.score;
+     m.aliens.getChildren().filter(a=>!a.premium).slice().forEach(a=>{shot(a);drain();});
+     check(m.hasAliveAliens&&s.state==='playing'&&m.aliens.countActive(true)===1,'last Premium blocks '+formation+' wave completion');
+     for(let hit=0;hit<5;hit++){shot(p.sprite);drain();if(hit<4)p.update(800);}
+     near(s.scoreManager.score-score,1210,'unchanged regular/Premium rewards and wave bonus');
+     check(s.invadersKilled===21&&s.state==='waveTransition'&&!m.hasAliveAliens,'Premium final kill completes '+formation+' wave');
+     check(!s.premiumProgress.eligible('wojak',100),'Premium kill never unlocks full boss');
+    }
+    m.seed=12345;
+    // The established shared-direction combat fixtures exercise Classic/Diamond.
+    // Actual Twin combat, group ownership and progression are in twin-squads-browser.cjs.
+    d.WaveDirectorConfig.formation.choices=['grid','diamond'];
     s.restart();
     for(const wave of [1,2,3,6,7,10,11,14,20,100]){
      s.restart();m.reset(wave);const roots=m.aliens.getChildren(),p=owner(),f=m.premiumPlan.premiums[0];
@@ -131,7 +167,8 @@ async function serve(route) {
      near(p.sprite.x,f.x,'premium footprint center x');near(p.sprite.y,f.y,'premium footprint center y');
      check(p.sprite.displayWidth<=f.width+1e-5&&p.sprite.displayHeight<=f.height+1e-5,'fits reserved area');
      roots.forEach((a,i)=>{const b=a.getBounds();roots.slice(i+1).forEach(other=>{const o=other.getBounds();check(b.right<=o.left+1e-5||b.left>=o.right-1e-5||b.bottom<=o.top+1e-5||b.top>=o.bottom-1e-5,'no artwork overlap');});});
-     const start=p.sprite.x;m.update(100,10000);near(p.sprite.x-start,m.configuration.movementSpeed*.1,'survivor starts 1x');
+     check(roots.every(a=>(a.premium||a).direction===m.configuration.initialDirection),'regular and Premium roots share initial direction');
+     const start=p.sprite.x;m.update(100,10000);near(p.sprite.x-start,m.configuration.initialDirection*m.configuration.movementSpeed*.1,'survivor starts 1x');
      near(p.foreground.x,p.sprite.x,'layers follow movement');
      for(let i=0;i<40;i++)m.update(100,10000);
      roots.forEach(a=>check(a.getBounds().left>=-1e-5&&a.getBounds().right<=800+1e-5,'edge reversal respects bounds'));
@@ -236,7 +273,7 @@ async function serve(route) {
     }
     s.restart();m.stopMovement();s.firingTimer=Infinity;
     testGame.renderer.preRender();s.sys.render(testGame.renderer);testGame.renderer.postRender();
-    return {renderer:testGame.renderer.type,stages,regularThreatCap:15,actualEntities:21,logicalSlots:24};
+    return {renderer:testGame.renderer.type,stages,footprintCoverage,regularThreatCap:15,actualEntities:21,logicalSlots:24};
    });
    await page.screenshot({path:path.join(output,renderer+'-premium-wave-1.png')});reports.push(report);
    await page.evaluate(()=>{
@@ -256,7 +293,7 @@ async function serve(route) {
   }
   assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(output,'premium-wojak-browser.json'),JSON.stringify(reports,null,2));
-  console.log('PASS: normal default-off Canvas/WebGL spawning; full boss completion unlock, failed/incomplete exclusion, actual waves 11-14, seeded hit/miss outcomes, run persistence/reset; debug override and all approved Premium combat, cleanup and original boss regressions.');
+  console.log('PASS: Canvas/WebGL all 15 classic / 4 upper-diamond Premium positions in both directions, no overlaps/bounds escape; final-Premium scoring/completion, normal progression and original combat/cleanup/boss regressions.');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
 
