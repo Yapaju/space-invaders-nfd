@@ -6,6 +6,14 @@ export default function copyMemeSkins() {
     return {
         name: 'copy-meme-skins',
         buildStart() {
+            // The approved mockup is reference-only and must never be packaged.
+            fs.mkdirSync(path.resolve('dist/assets/flex-card'), { recursive: true });
+            ['flex-card-background-v1.png', 'flex-card-circle-button.png', 'flex-card-share.png',
+                'flex-card-download.png', 'flex-card-website.png', 'flex-card-close.png', 'flex-card-frame.png'].forEach(name => {
+                const file = path.resolve('assets/flex-card', name);
+                this.addWatchFile(file);
+                fs.copyFileSync(file, path.resolve('dist/assets/flex-card', name));
+            });
             const popcatAudio = path.resolve('assets/sounds/popcat/popcat-pop.mp3');
             const audioDestination = path.resolve('dist/assets/sounds/popcat');
             this.addWatchFile(popcatAudio);
@@ -17,7 +25,7 @@ export default function copyMemeSkins() {
                 fs.mkdirSync(destination, { recursive: true });
                 this.addWatchFile(source);
                 fs.readdirSync(source).filter(name => name.endsWith('.png') &&
-                    (folder !== 'font' || /^nfd-font-[0-9]\.png$/.test(name))).forEach(name => {
+                    (folder !== 'font' || /^nfd-font-[0-9ENTRFOLXCADIVSK]\.png$/.test(name))).forEach(name => {
                     const file = path.join(source, name);
                     this.addWatchFile(file);
                     fs.copyFileSync(file, path.join(destination, name));

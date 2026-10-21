@@ -1,6 +1,7 @@
 import { AssetType } from "../assets";
 import { applySkinAppearance, MemeSkins } from "../skins";
 import { GoldenNumber, UiDepth, UiTexture } from "../golden-number";
+import { flexCardInstructionTexture } from '../flex-card-instruction';
 
 export const MAX_LIVES = 3;
 
@@ -9,6 +10,7 @@ export class ScoreManager {
   waveText: GoldenNumber;
   waveAnnouncement: GoldenNumber;
   gameOverImage: Phaser.GameObjects.Image;
+  flexCardInstruction: Phaser.GameObjects.Image;
   private scoreLabel: Phaser.GameObjects.Image;
   private livesLabel: Phaser.GameObjects.Image;
   lives: Phaser.Physics.Arcade.Group;
@@ -44,6 +46,13 @@ export class ScoreManager {
       .setDepth(UiDepth.Overlay).setVisible(false);
     this.gameOverImage.setScale(0.70 * Math.min((SIZE_X - 40) / this.gameOverImage.width,
       (SIZE_Y - 80) / this.gameOverImage.height));
+    // Existing artwork contains a 120px-high restart line ending at source y=665.
+    // Draw the new glyphs at ~58% of that height, below it, without moving the image.
+    const scale = this.gameOverImage.scaleX;
+    const bottomOfRestart = this.gameOverImage.y - this.gameOverImage.displayHeight / 2 + 665 * scale;
+    this.flexCardInstruction = this._scene.add.image(SIZE_X / 2, bottomOfRestart + 12 * scale + 18,
+      flexCardInstructionTexture(this._scene))
+      .setOrigin(.5, 0).setScale(scale * .76).setDepth(UiDepth.Overlay).setVisible(false);
     this._setLivesText(SIZE_X);
     this._scene.events.once('shutdown', this.destroy, this);
   }
@@ -90,16 +99,19 @@ export class ScoreManager {
   }
 
   setWaveText(wave: number) {
+    this.flexCardInstruction.setVisible(false);
     this.gameOverImage.setVisible(false);
     this.waveAnnouncement.setText(String(wave)).setVisible(true);
   }
 
   setGameOverText() {
+    this.flexCardInstruction.setVisible(true);
     this.waveAnnouncement.setVisible(false);
     this.gameOverImage.setVisible(true);
   }
 
   hideText() {
+    this.flexCardInstruction.setVisible(false);
     this.waveAnnouncement.setVisible(false);
     this.gameOverImage.setVisible(false);
   }
@@ -111,6 +123,7 @@ export class ScoreManager {
     this.scoreLabel.destroy();
     this.livesLabel.destroy();
     this.gameOverImage.destroy();
+    this.flexCardInstruction.destroy();
     this._scene.events.off('shutdown', this.destroy, this);
   }
 

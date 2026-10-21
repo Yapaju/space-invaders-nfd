@@ -27,6 +27,9 @@ import { AudioBalance, installAudioHeadroom } from '../interface/audio-balance';
 import { WaveDirectorConfig, firingIntervalForWave, isBossMilestone, waveSeedFromSearch } from '../interface/wave-director';
 import { PremiumProgress } from '../interface/premium-spawn';
 import { premiumInvaderOf } from '../interface/premium-invader';
+import { FinalRunStats } from '../interface/flex-card-renderer';
+import { FlexCardPreview } from '../interface/flex-card-preview';
+import { FlexCardLetters } from '../interface/flex-card-instruction';
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -36,6 +39,9 @@ export class MainScene extends Phaser.Scene {
     bulletTime = 0;
     firingTimer = Infinity;
     wave = 1;
+    invadersKilled = 0;
+    private finalRunStats: FinalRunStats;
+    private flexCardPreview = new FlexCardPreview(() => this.input.keyboard.resetKeys());
     private nextWaveReadyAt = 0;
     private pendingCleanup: Array<() => void> = [];
     private bananaBombs: BananaBombs;
@@ -78,6 +84,7 @@ export class MainScene extends Phaser.Scene {
         this.load.image(AssetType.ElonEscapeRight, "meme-skins/elon-ally-escape-right.png");
         this.load.image(AssetType.ElonEscapeLeft, "meme-skins/elon-ally-escape-left.png");
         GoldenUiAssets.forEach(asset => this.load.image(asset.key, asset.path));
+        FlexCardLetters.forEach(asset => this.load.image(asset.key, asset.path));
         PlayerPoses.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         PepePoses.concat(PonkePoses, PopcatPoses).forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         this.load.spritesheet(AssetType.Kaboom, "images/explode.png", {
@@ -130,6 +137,8 @@ export class MainScene extends Phaser.Scene {
         this.events.on('pause', this._syncPlayerPose, this);
         this.events.on('resume', this._syncPlayerPose, this);
         this.events.once('shutdown', () => {
+            this.flexCardPreview.close();
+            this.input.keyboard.off('keydown-ENTER', this._openFlexCard, this);
             this.firingTimer = Infinity;
             stopPopcatSounds(this);
             this.events.off('pause', this._syncPlayerPose, this);
@@ -144,8 +153,9 @@ export class MainScene extends Phaser.Scene {
             this.pendingCleanup = [];
         });
 
-        this.fireKey.on("down", () => {
-            if (this.state === GameState.GameOver) {
+        this.input.keyboard.on('keydown-ENTER', this._openFlexCard, this);
+        this.fireKey.on("down", (_key, event: KeyboardEvent) => {
+            if (this.state === GameState.GameOver && !this.flexCardPreview.isOpen && !event.repeat) {
                 this.restart();
             }
         })
@@ -276,6 +286,7 @@ export class MainScene extends Phaser.Scene {
         }
         const explosion: Kaboom = this.assetManager.explosions.get();
         alien.kill(explosion);
+        this.invadersKilled += 1;
         this.pendingCleanup.push(() => {
             bullet.destroy();
             alien.destroy();
@@ -331,6 +342,10 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _gameOver() {
+        if (this.state === GameState.GameOver) return;
+        this.finalRunStats = Object.freeze({
+            wave: this.wave, score: this.scoreManager.score, invadersKilled: this.invadersKilled
+        });
         this.firingTimer = Infinity;
         stopPopcatSounds(this);
         if (this.wojak) this.wojak.clear();
@@ -343,6 +358,13 @@ export class MainScene extends Phaser.Scene {
         if (this.alienManager.clearPremiumWeapons) this.alienManager.clearPremiumWeapons();
         if (this.bananaBombs) this.bananaBombs.clear();
         if (this.elonAlly) this.elonAlly.clear();
+    }
+
+    private _openFlexCard(event: KeyboardEvent) {
+        if (event.repeat || this.state !== GameState.GameOver || !this.finalRunStats || this.flexCardPreview.isOpen) return;
+        // Opening focuses CLOSE; suppress this initiating Enter's native click.
+        event.preventDefault();
+        this.flexCardPreview.open(this.finalRunStats);
     }
 
     private _enemyFires() {
@@ -441,6 +463,9 @@ export class MainScene extends Phaser.Scene {
     }
 
     restart() {
+        if (this.flexCardPreview.isOpen) return;
+        this.invadersKilled = 0;
+        this.finalRunStats = undefined;
         stopPopcatSounds(this);
         if (this.wojak) this.wojak.clear();
         this.completedBossWave = 0;
