@@ -84,6 +84,11 @@ export function isBossMilestone(wave: number) {
     return wave > 0 && wave % WaveDirectorConfig.boss.interval === 0;
 }
 
+export function bossForWave(wave: number): 'wojak' | 'mubarak' | undefined {
+    if (!isBossMilestone(wave)) return undefined;
+    return (wave / WaveDirectorConfig.boss.interval) % 2 === 1 ? 'wojak' : 'mubarak';
+}
+
 // Seed affects plans only; do not reseed Phaser's shared weapon/animation RNG.
 export function waveSeedFromSearch(search: string): number {
     const match = /(?:^|[?&])waveSeed=([0-9]+)(?:&|$)/.exec(search);

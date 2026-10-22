@@ -34,7 +34,7 @@ const bootstrap = '<script src="/phaser.js"></script><script>' +
     'if(name==="phaser")return Phaser;const p=id.split("/");p.pop();' +
     'name.split("/").forEach(v=>{if(v==="..")p.pop();else if(v!==".")p.push(v)});return load(p.join("/"))});return m.exports;}' +
     // This suite checks the normal WD1 path; Premium progression/combat has its own suite.
-    'load("src/interface/wave-director").WaveDirectorConfig.premiumInvaders.testMode.enabled=false;load("src/game");</script>';
+    'load("src/interface/wave-director").WaveDirectorConfig.premiumInvaders.testMode.enabled=false;load("src/interface/mubarak").MubarakSettings.testSpawn.enabled=false;load("src/game");</script>';
 const html = fs.readFileSync(path.join(root,'dist/index.html'),'utf8')
     .replace('<script src="game.js"></script>', bootstrap);
 async function serve(route) {

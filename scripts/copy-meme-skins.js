@@ -19,12 +19,13 @@ export default function copyMemeSkins() {
             this.addWatchFile(popcatAudio);
             fs.mkdirSync(audioDestination, { recursive: true });
             fs.copyFileSync(popcatAudio, path.join(audioDestination, 'popcat-pop.mp3'));
-            ['meme-skins', 'meme-skins/player', 'texts', 'font', 'weapons/rapid-laser', 'weapons/wojak-red-candle', 'weapons/wojak-tear', 'weapons/popcat-corn', 'mini-boss/wojak'].forEach(folder => {
+            ['meme-skins', 'meme-skins/player', 'texts', 'font', 'weapons/rapid-laser', 'weapons/mubarak-barrels', 'weapons/mubarak-diamonds', 'weapons/wojak-red-candle', 'weapons/wojak-tear', 'weapons/popcat-corn', 'mini-boss/wojak', 'mini-boss/mubarak'].forEach(folder => {
                 const source = path.resolve('assets', folder);
                 const destination = path.resolve('dist/assets', folder);
                 fs.mkdirSync(destination, { recursive: true });
                 this.addWatchFile(source);
                 fs.readdirSync(source).filter(name => name.endsWith('.png') &&
+                    (folder !== 'mini-boss/mubarak' || /^mubarak-(act1-([1-6]-(left|right)|explosion-[1-5])|act2-1-(left|right))\.png$/.test(name)) &&
                     (folder !== 'font' || /^nfd-font-[0-9ENTRFOLXCADIVSK]\.png$/.test(name))).forEach(name => {
                     const file = path.join(source, name);
                     this.addWatchFile(file);

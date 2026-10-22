@@ -1,3 +1,4 @@
+import { applyHitFlash } from './hit-flash';
 import { AssetType } from './assets';
 import { WojakCandles } from './wojak-candles';
 import { WojakTears } from './wojak-tears';
@@ -531,13 +532,9 @@ export class WojakBoss {
         }
         this.flashElapsed = Math.min(this.flashDuration, this.flashElapsed);
         const layers = [this.sprite, this.character, this.foreground];
-        const cycle = WojakSettings.milestoneFlashOnDuration + WojakSettings.milestoneFlashOffDuration;
-        if (this.flashElapsed === this.flashDuration ||
-            this.flashElapsed % cycle >= WojakSettings.milestoneFlashOnDuration) {
-            layers.forEach(layer => layer.clearTint());
-            return;
-        }
-        layers.forEach(layer => layer.setTint(WojakSettings.milestoneFlashTint));
+        applyHitFlash(layers, this.flashElapsed, this.flashDuration,
+            WojakSettings.milestoneFlashOnDuration, WojakSettings.milestoneFlashOffDuration,
+            WojakSettings.milestoneFlashTint);
     }
 
     // One logical boss owns every layer; only the ship has an Arcade body.

@@ -1,5 +1,7 @@
 import { AssetType } from "./assets";
 
+export const EnemyBulletSettings = { speed: 120 };
+
 export class EnemyBullet extends Phaser.Physics.Arcade.Sprite {
     get damage(): number { return 1; }
 

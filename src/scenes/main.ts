@@ -1,3 +1,6 @@
+import { MubarakDiamondAssets } from '../interface/mubarak-shrapnel';
+import { MubarakBarrelAsset } from '../interface/mubarak-barrels';
+import { MubarakEncounter, MubarakAssets, MubarakExplosionAssets, MubarakSettings, premiumHitDuration, prepareMubarak } from '../interface/mubarak';
 import { AssetType, SoundType } from "../interface/assets";
 import { Bullet, ElectricLaserSettings } from "../interface/bullet";
 import { AssetManager } from "../interface/manager/asset-manager";
@@ -6,7 +9,7 @@ import { Ship } from "../interface/ship";
 import { AnimationFactory } from "../interface/factory/animation-factory";
 import { Alien } from "../interface/alien";
 import { Kaboom } from "../interface/kaboom";
-import { EnemyBullet } from "../interface/enemy-bullet";
+import { EnemyBullet, EnemyBulletSettings } from "../interface/enemy-bullet";
 import { ScoreManager } from "../interface/manager/score-manager";
 import { GameState } from "../interface/game-state";
 import { PlayerPoses, preparePlayerPoses } from "../interface/skins";
@@ -24,7 +27,7 @@ import { PopcornAssets, preparePopcornSkins, firePopcatAttack } from "../interfa
 
 import { preloadPopcatAudio, installPopcatAudio, stopPopcatSounds } from "../interface/popcat-audio";
 import { AudioBalance, installAudioHeadroom } from '../interface/audio-balance';
-import { WaveDirectorConfig, firingIntervalForWave, isBossMilestone, waveSeedFromSearch } from '../interface/wave-director';
+import { WaveDirectorConfig, firingIntervalForWave, bossForWave, waveSeedFromSearch } from '../interface/wave-director';
 import { PremiumProgress } from '../interface/premium-spawn';
 import { premiumInvaderOf } from '../interface/premium-invader';
 import { FinalRunStats } from '../interface/flex-card-renderer';
@@ -49,6 +52,8 @@ export class MainScene extends Phaser.Scene {
     private elonAlly: ElonAlly;
     private rapidFire: RapidFire;
     private wojak: WojakBoss;
+    private mubarak: MubarakEncounter;
+    private completedMubarak = false;
     private completedBossWave = 0;
     private premiumProgress = new PremiumProgress();
     private waveSeed = waveSeedFromSearch(typeof location === 'undefined' ? '' : location.search);
@@ -74,6 +79,10 @@ export class MainScene extends Phaser.Scene {
         this.load.image(AssetType.EnemyBullet, "images/enemy-bullet.png");
         PopcornAssets.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
+        this.load.image(MubarakBarrelAsset.key, MubarakBarrelAsset.path);
+        MubarakDiamondAssets.forEach(asset => this.load.image(asset.key, asset.path));
+        MubarakExplosionAssets.forEach(asset => this.load.image(asset.key, asset.path));
+        MubarakAssets.forEach(pose => this.load.image(`${pose.key}-source`, pose.path));
         WojakAssets.forEach(pose => this.load.image(pose.asset, pose.path));
         CandleAssets.forEach(candle => this.load.image(candle.asset, candle.path));
         this.load.image(TearAsset.asset, TearAsset.path);
@@ -104,6 +113,8 @@ export class MainScene extends Phaser.Scene {
     }
 
     create() {
+        prepareMubarak(this);
+        this.completedMubarak = false;
         preparePlayerPoses(this);
         prepareEnemySkins(this);
         preparePopcornSkins(this);
@@ -139,6 +150,10 @@ export class MainScene extends Phaser.Scene {
         this.events.once('shutdown', () => {
             this.flexCardPreview.close();
             this.input.keyboard.off('keydown-ENTER', this._openFlexCard, this);
+            this.input.keyboard.off('keydown-F6', this._previewMubarakFinal, this);
+            if (typeof __NFD_DEV__ !== 'undefined' && __NFD_DEV__) {
+                this.input.keyboard.removeCapture(Phaser.Input.Keyboard.KeyCodes.F6);
+            }
             this.firingTimer = Infinity;
             stopPopcatSounds(this);
             this.events.off('pause', this._syncPlayerPose, this);
@@ -146,6 +161,8 @@ export class MainScene extends Phaser.Scene {
             this.bananaBombs.clear();
             this.elonAlly.clear();
             if (this.wojak) this.wojak.clear();
+            if (this.mubarak) this.mubarak.clear();
+            this.completedMubarak = false;
             this.completedBossWave = 0;
             this.premiumProgress.reset();
             if (this.alienManager.clearPremiumWeapons) this.alienManager.clearPremiumWeapons();
@@ -154,6 +171,10 @@ export class MainScene extends Phaser.Scene {
         });
 
         this.input.keyboard.on('keydown-ENTER', this._openFlexCard, this);
+        if (typeof __NFD_DEV__ !== 'undefined' && __NFD_DEV__) {
+            this.input.keyboard.addCapture(Phaser.Input.Keyboard.KeyCodes.F6);
+            this.input.keyboard.on('keydown-F6', this._previewMubarakFinal, this);
+        }
         this.fireKey.on("down", (_key, event: KeyboardEvent) => {
             if (this.state === GameState.GameOver && !this.flexCardPreview.isOpen && !event.repeat) {
                 this.restart();
@@ -176,6 +197,41 @@ export class MainScene extends Phaser.Scene {
         if (this.rapidFire) this.rapidFire.update();
         if (this.state === GameState.WaveTransition) {
             this._startNextWave();
+        }
+        if (this.state === GameState.MubarakEncounter) {
+            const complete = this.mubarak.update(delta, this.player, () => this._damagePlayer());
+            if (!this.player.active) {
+                const cleanup = this.pendingCleanup;
+                this.pendingCleanup = [];
+                cleanup.forEach(action => action());
+                return;
+            }
+            if (complete) {
+                this.completedMubarak = true;
+                this.completedBossWave = this.wave;
+                this.state = GameState.WaveTransition;
+                this.nextWaveReadyAt = this.time.now;
+                this.scoreManager.setWaveText(this.wave + 1);
+            }
+            this._shipKeyboardHandler();
+            if (!complete) this.assetManager.bullets.getChildren().forEach((bullet: Bullet) => {
+                if (!bullet.active) return;
+                const body = bullet.body as Phaser.Physics.Arcade.Body;
+                if (this.mubarak.tryHitShrapnel(body) || this.mubarak.tryHitBarrel(body)) {
+                    bullet.disableBody(true, true);
+                    this.pendingCleanup.push(() => bullet.destroy());
+                    return;
+                }
+                if (!this.mubarak.collides(body)) return;
+                // Premium convention: consume every diamond contact, including immunity.
+                this.mubarak.receiveLaser(body, bullet, this.player.y);
+                bullet.disableBody(true, true);
+                this.pendingCleanup.push(() => bullet.destroy());
+            });
+            const cleanup = this.pendingCleanup;
+            this.pendingCleanup = [];
+            cleanup.forEach(action => action());
+            return;
         }
         if (this.state === GameState.BossEncounter) {
             const complete = this.wojak.update(delta);
@@ -297,7 +353,7 @@ export class MainScene extends Phaser.Scene {
             this.state = GameState.WaveTransition;
             this.firingTimer = Infinity;
             this.nextWaveReadyAt = this.time.now + 1500;
-            if (this._bossPending()) this.scoreManager.hideText();
+            if (this._bossPending() || this._mubarakPending()) this.scoreManager.hideText();
             else this.scoreManager.setWaveText(this.wave + 1);
             this.pendingCleanup.push(() => {
                 this.assetManager.enemyBullets.clear(true, true);
@@ -324,7 +380,9 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _damagePlayer(damage = 1) {
-        if ((this.state !== GameState.Playing && this.state !== GameState.BossEncounter) || !this.player.active) return;
+        if ((this.state !== GameState.Playing && this.state !== GameState.BossEncounter &&
+            this.state !== GameState.MubarakEncounter) || !this.player.active) return;
+        if (this.state === GameState.MubarakEncounter && this.mubarak.phase !== 'act2' && this.mubarak.phase !== 'cruise') return;
         // One accepted hit removes up to its damage in fixed HUD slots. Keep
         // protection checks above the whole hit and stop at zero remaining lives.
         if (!this.scoreManager.lives.getFirstAlive()) return;
@@ -349,6 +407,7 @@ export class MainScene extends Phaser.Scene {
         this.firingTimer = Infinity;
         stopPopcatSounds(this);
         if (this.wojak) this.wojak.clear();
+        if (this.mubarak) this.mubarak.clear();
         if (this.rapidFire) this.rapidFire.clear();
         this.state = GameState.GameOver;
         this.scoreManager.setGameOverText();
@@ -397,14 +456,15 @@ export class MainScene extends Phaser.Scene {
         let enemyBullet: EnemyBullet = this.assetManager.enemyBullets.get();
         if (enemyBullet && randomEnemy) {
             enemyBullet.setPosition(randomEnemy.x, randomEnemy.y);
-            this.physics.moveToObject(enemyBullet, this.player, 120);
+            this.physics.moveToObject(enemyBullet, this.player, EnemyBulletSettings.speed);
             this.firingTimer = this.time.now + interval;
         }
     }
 
     private get playerShootingEnabled() {
         return !this.sys.isPaused() && (this.state === GameState.Playing ||
-            (this.state === GameState.BossEncounter && this.wojak && this.wojak.shootingEnabled)) && this.player.active;
+            (this.state === GameState.BossEncounter && this.wojak && this.wojak.shootingEnabled) ||
+            (this.state === GameState.MubarakEncounter && this.mubarak && this.mubarak.shootingEnabled)) && this.player.active;
     }
 
     private _fireBullet() {
@@ -430,6 +490,10 @@ export class MainScene extends Phaser.Scene {
             this.assetManager.bullets.countActive(true) > 0) {
             return;
         }
+        if (this._mubarakPending()) {
+            this._startMubarak();
+            return;
+        }
         if (this._bossPending()) {
             this._startWojak();
             return;
@@ -442,6 +506,50 @@ export class MainScene extends Phaser.Scene {
         this.scoreManager.hideText();
         this.firingTimer = this.time.now + firingIntervalForWave(this.wave);
         this.state = GameState.Playing;
+    }
+
+    private _previewMubarakFinal(event: KeyboardEvent) {
+        if (event.repeat || this.sys.isPaused() || this.flexCardPreview.isOpen) return;
+        // F6 is registered only in development builds. Reset the run so repeated
+        // previews use the same real entrance/damage/completion lifecycle.
+        this.restart();
+        this.alienManager.aliens.clear(true, true);
+        this.assetManager.bullets.clear(true, true);
+        this.state = GameState.WaveTransition;
+        this._startMubarak(true);
+        if (!this.mubarak || this.mubarak.phase !== 'entrance') return;
+        this.mubarak.update(MubarakSettings.entranceMs);
+        for (let hit = 0; hit < MubarakSettings.successfulHits - 1; hit++) {
+            this.mubarak.hit();
+            this.mubarak.update(premiumHitDuration());
+        }
+        const bounds = this.physics.world.bounds;
+        this.mubarak.sprite.setPosition(bounds.centerX, bounds.top + MubarakSettings.patrolY);
+        this.mubarak.hit();
+    }
+
+    private _mubarakPending() {
+        return this.completedBossWave !== this.wave && (bossForWave(this.wave) === 'mubarak' ||
+            (MubarakSettings.testSpawn.enabled && !this.completedMubarak &&
+                this.wave === MubarakSettings.testSpawn.afterWave));
+    }
+
+    private _startMubarak(preview = false) {
+        if (this.state !== GameState.WaveTransition || (!preview && !this._mubarakPending()) ||
+            this.alienManager.hasAliveAliens) return;
+        this.firingTimer = Infinity;
+        this.state = GameState.MubarakEncounter;
+        this.alienManager.stopMovement();
+        this.alienManager.clearPremiumWeapons();
+        this.alienManager.aliens.clear(true, true);
+        this.assetManager.enemyBullets.clear(true, true);
+        this.assetManager.bullets.clear(true, true);
+        if (this.bananaBombs) this.bananaBombs.clear();
+        if (this.elonAlly) this.elonAlly.clear();
+        stopPopcatSounds(this);
+        this.scoreManager.hideText();
+        if (!this.mubarak) this.mubarak = new MubarakEncounter(this, points => this.scoreManager.increaseScore(points));
+        this.mubarak.start(this.waveSeed, this.wave);
     }
 
     private _startWojak() {
@@ -459,7 +567,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _bossPending() {
-        return isBossMilestone(this.wave) && this.completedBossWave !== this.wave;
+        return bossForWave(this.wave) === 'wojak' && this.completedBossWave !== this.wave;
     }
 
     restart() {
@@ -468,7 +576,9 @@ export class MainScene extends Phaser.Scene {
         this.finalRunStats = undefined;
         stopPopcatSounds(this);
         if (this.wojak) this.wojak.clear();
+        if (this.mubarak) this.mubarak.clear();
         this.completedBossWave = 0;
+        this.completedMubarak = false;
         this.premiumProgress.reset();
         if (this.rapidFire) this.rapidFire.clear();
         if (this.elonAlly) this.elonAlly.clear();

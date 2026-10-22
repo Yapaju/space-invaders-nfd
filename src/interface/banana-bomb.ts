@@ -75,19 +75,22 @@ export class BananaBombs {
         this.flights.push({ sprite, path, launchedAt: this.scene.time.now });
     }
 
-    update(player: Phaser.Physics.Arcade.Sprite) {
-        const now = this.scene.time.now;
+    impact(x: number, y: number, landedAt = this.scene.time.now) {
+        const sprite: Kaboom = this.explosions ? this.explosions.get() : new Kaboom(this.scene);
+        if (!this.explosions) this.scene.add.existing(sprite);
+        sprite.setPosition(x, y).setScale(BananaSettings.visualScale);
+        sprite.play(AnimationType.PonkeExplosion);
+        this.blasts.push({ sprite, x, y,
+            expiresAt: landedAt + BananaSettings.damageDurationMs, hit: false });
+    }
+
+    update(player: Phaser.Physics.Arcade.Sprite, now = this.scene.time.now) {
         this.flights = this.flights.filter(flight => {
             const seconds = (now - flight.launchedAt) / 1000;
             if (seconds >= flight.path.duration) {
                 flight.sprite.destroy();
-                const sprite: Kaboom = this.explosions.get();
-                sprite.setPosition(flight.path.landingX, flight.path.landingY);
-                sprite.setScale(BananaSettings.visualScale);
-                sprite.play(AnimationType.PonkeExplosion);
-                this.blasts.push({ sprite, x: flight.path.landingX, y: flight.path.landingY,
-                    expiresAt: flight.launchedAt + flight.path.duration * 1000 + BananaSettings.damageDurationMs,
-                    hit: false });
+                this.impact(flight.path.landingX, flight.path.landingY,
+                    flight.launchedAt + flight.path.duration * 1000);
                 return false;
             }
             const position = flight.path.position(seconds);

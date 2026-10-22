@@ -102,6 +102,8 @@ function load(relative) {
     return module.exports;
 }
 const { MainScene } = load('src/scenes/main.ts');
+// Isolate legacy progression; enabled encounter is covered in mubarak-browser.cjs.
+load('src/interface/mubarak.ts').MubarakSettings.testSpawn.enabled = false;
 const { WojakBoss, WojakPumpSettings, WojakSettings, WojakAssets, WojakLayers, Wojak25Poses, Wojak0Poses, WojakMinus30Poses, WojakMinus70Poses, WojakLighting, formatWojakPortfolio, WojakVisualSettings, WojakPhase, WojakDevelopment, shouldStartWojakTest, WOJAK_TRIGGER_AFTER_WAVE } = load('src/interface/wojak-boss.ts');
 const { GameState } = load('src/interface/game-state.ts');
 const { ScoreManager, MAX_LIVES } = load('src/interface/manager/score-manager.ts');
