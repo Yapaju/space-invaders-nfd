@@ -65,8 +65,9 @@ async function serve(route) {
   page.on('pageerror',e=>errors.push(e.message));await page.route('http://wojak.test/**',serve);await page.route('https://www.googletagmanager.com/**',r=>r.abort());
   for(const renderer of ['webgl','canvas']){
    await page.goto('http://wojak.test/?waveSeed=0'+(renderer==='canvas'?'&canvas':''));await page.waitForFunction(()=>window.testGame&&testGame.scene.scenes[0].player);
+   await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'helpers/active-wave-fixture.js'),'utf8')});
    const report=await page.evaluate(()=>{
-    testGame.loop.stop();const s=testGame.scene.scenes[0],m=s.alienManager,d=load('src/interface/wave-director');
+    testGame.loop.stop();installActiveWaveFixture(testGame.scene.scenes[0]);const s=testGame.scene.scenes[0],m=s.alienManager,d=load('src/interface/wave-director');
     const check=(ok,label)=>{if(!ok)throw Error(label);},near=(a,b,label)=>check(Math.abs(a-b)<1e-5,label+': '+a+' != '+b);
     check(JSON.stringify(d.WaveDirectorConfig.formation.choices)===JSON.stringify(['grid','diamond','TWIN_SQUADS','SNAKE']),'four production choices');
     const seedFor=(direction,wave=1)=>{let seed=0;while(d.getWavePlan(wave,seed).formation!=='SNAKE'||d.getWavePlan(wave,seed).initialDirection!==direction)seed++;return seed;};

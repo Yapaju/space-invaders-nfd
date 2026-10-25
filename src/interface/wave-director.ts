@@ -25,6 +25,7 @@ export const WaveDirectorConfig = {
     boss: { interval: 10, type: 'wojak' },
     formation: {
         columns: 6, rows: 4, startY: 100, columnSpacing: 88, rowSpacing: 74,
+        entrance: { speed: 180, clearance: 1 },
         choices: ['grid', 'diamond', 'TWIN_SQUADS', 'SNAKE'] as Formation[],
         diamond: { rowCounts: [2, 4, 6, 6, 4, 2] },
         twinSquads: { columns: 4, rows: 3, descentIntervalMs: 4000, descentPixels: 25 },
@@ -89,12 +90,19 @@ export function bossForWave(wave: number): 'wojak' | 'mubarak' | undefined {
     return (wave / WaveDirectorConfig.boss.interval) % 2 === 1 ? 'wojak' : 'mubarak';
 }
 
-// Seed affects plans only; do not reseed Phaser's shared weapon/animation RNG.
-export function waveSeedFromSearch(search: string): number {
+// One fresh run seed feeds existing isolated gameplay streams. Keep Phaser's
+// shared live weapon/animation RNG independent, as before.
+export function createGameplaySeed(): number {
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+        return crypto.getRandomValues(new Uint32Array(1))[0];
+    }
+    return Math.floor(Math.random() * 4294967296);
+}
+export function waveSeedFromSearch(search: string, freshSeed = createGameplaySeed): number {
     const match = /(?:^|[?&])waveSeed=([0-9]+)(?:&|$)/.exec(search);
-    if (!match) return WaveDirectorConfig.seed;
+    if (!match) return freshSeed();
     const seed = Number(match[1]);
-    return Number.isSafeInteger(seed) && seed <= 0xffffffff ? seed : WaveDirectorConfig.seed;
+    return Number.isSafeInteger(seed) && seed <= 0xffffffff ? seed : freshSeed();
 }
 
 export function randomForWave(seed: number, wave: number) {

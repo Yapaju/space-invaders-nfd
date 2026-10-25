@@ -56,7 +56,7 @@ export class MainScene extends Phaser.Scene {
     private completedMubarak = false;
     private completedBossWave = 0;
     private premiumProgress = new PremiumProgress();
-    private waveSeed = waveSeedFromSearch(typeof location === 'undefined' ? '' : location.search);
+    private waveSeed: number;
     starfield: Phaser.GameObjects.TileSprite;
     player: Phaser.Physics.Arcade.Sprite;
     alienManager: AlienManager;
@@ -134,6 +134,7 @@ export class MainScene extends Phaser.Scene {
             Phaser.Input.Keyboard.KeyCodes.SPACE
         );
         this.player = Ship.create(this);
+        this.waveSeed = waveSeedFromSearch(typeof location === 'undefined' ? '' : location.search);
         this.alienManager = new AlienManager(this, this.waveSeed, this.premiumProgress);
         this.scoreManager = new ScoreManager(this);
         this.rapidFire = new RapidFire(this, (previous, current) => {
@@ -168,6 +169,7 @@ export class MainScene extends Phaser.Scene {
             this.completedMubarak = false;
             this.completedBossWave = 0;
             this.premiumProgress.reset();
+            this.alienManager.stopMovement();
             if (this.alienManager.clearPremiumWeapons) this.alienManager.clearPremiumWeapons();
             this.alienManager.onDescent = undefined;
             this.pendingCleanup = [];
@@ -337,6 +339,12 @@ export class MainScene extends Phaser.Scene {
         if (this.state !== GameState.Playing || !bullet.active || !alien.active) {
             return;
         }
+        // A beam's offscreen tip must not hit an invader above the world. Keep
+        // existing Arcade hitboxes, but require their shared contact inside it.
+        const world = this.physics.world.bounds;
+        const shot = bullet.body as Phaser.Physics.Arcade.Body, target = alien.body as Phaser.Physics.Arcade.Body;
+        if (Math.min(shot.bottom, target.bottom, world.bottom) <= Math.max(shot.top, target.top, world.top) ||
+            Math.min(shot.right, target.right, world.right) <= Math.max(shot.left, target.left, world.left)) return;
         bullet.disableBody(true, true);
         const premium = premiumInvaderOf(alien);
         if (premium && (!premium.hit() || !premium.defeated)) {
@@ -436,6 +444,7 @@ export class MainScene extends Phaser.Scene {
         }
         let randomEnemy = this.alienManager.getRandomAliveEnemy();
         if (!randomEnemy) {
+            this.firingTimer = this.time.now + WaveDirectorConfig.firing.retryMs;
             return;
         }
         const firing = WaveDirectorConfig.firing;
@@ -504,7 +513,7 @@ export class MainScene extends Phaser.Scene {
         }
         this.wave += 1;
         this.scoreManager.setWave(this.wave);
-        this.alienManager.reset(this.wave);
+        this.alienManager.reset(this.wave, this.waveSeed);
         if (this.elonAlly) this.elonAlly.startWave(this.wave);
         this.scoreManager.recoverOneLife();
         this.scoreManager.hideText();
@@ -591,6 +600,7 @@ export class MainScene extends Phaser.Scene {
         this.pendingCleanup = [];
         this.nextWaveReadyAt = 0;
         this.wave = 1;
+        this.waveSeed = waveSeedFromSearch(typeof location === 'undefined' ? '' : location.search);
         this.state = GameState.Playing;
         Ship.setDirection(this.player, 0);
         const position = Ship.startPosition(this);
@@ -601,7 +611,7 @@ export class MainScene extends Phaser.Scene {
         this.scoreManager.resetLives();
         this.scoreManager.setWave(this.wave);
         this.scoreManager.hideText();
-        this.alienManager.reset(this.wave);
+        this.alienManager.reset(this.wave, this.waveSeed);
         this.assetManager.reset();
         if (this.elonAlly) this.elonAlly.startWave(this.wave);
         this.bulletTime = this.time.now;

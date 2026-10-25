@@ -23,6 +23,8 @@ export class AlienManager {
     onDescent: (count: number) => void;
     private direction = 1;
     private movementStopped = false;
+    private entranceRemaining = 0;
+    get isEntering() { return this.entranceRemaining > 0; }
     private speed = WaveDirectorConfig.movement.regularSpeed;
     private initialEntityCount = INVADERS_PER_WAVE;
     private rows: GroupMovement[] = [];
@@ -45,8 +47,16 @@ export class AlienManager {
         this._sortAliens();
     }
 
+    canAttack(alien: Alien): boolean {
+        if (!alien.active || !alien.visible || alien.alpha <= 0) return false;
+        const sprite = alien.getBounds(), world = this._scene.physics.world.bounds;
+        return sprite.bottom > world.top && sprite.top < world.bottom &&
+            sprite.right > world.left && sprite.left < world.right;
+    }
+
     getRandomAliveEnemy(): Alien | undefined {
-        let aliens = this.aliens.getChildren().filter(alien => alien.active && !premiumInvaderOf(alien as Alien)) as Alien[];
+        let aliens = (this.aliens.getChildren() as Alien[]).filter(alien =>
+            this.canAttack(alien) && !premiumInvaderOf(alien));
         if (!aliens.length) {
             return undefined;
         }
@@ -54,8 +64,9 @@ export class AlienManager {
         return aliens[random];
     }
 
-    reset(wave = 1) {
+    reset(wave = 1, seed = this.seed) {
         this.stopMovement();
+        this.seed = seed;
         this.descentCount = 0;
         this._sortAliens(wave);
         this.speed = this.configuration.movementSpeed;
@@ -64,12 +75,23 @@ export class AlienManager {
 
     stopMovement() {
         this.movementStopped = true;
+        this.entranceRemaining = 0;
     }
 
     // Returns true as soon as a living invader reaches the player's defensive line.
     update(delta: number, defensiveLine: number): boolean {
         const aliens = this.aliens.getChildren().filter(alien => alien.active) as Alien[];
         if (this.movementStopped || !aliens.length) {
+            if (!aliens.length) this.entranceRemaining = 0;
+            return false;
+        }
+        if (this.isEntering) {
+            const distance = Math.min(this.entranceRemaining,
+                WaveDirectorConfig.formation.entrance.speed * Math.max(0, delta) / 1000);
+            this.entranceRemaining = Math.max(0, this.entranceRemaining - distance);
+            this._move(aliens, 0, distance);
+            // Normal movement/timed descent starts on the next update. Never
+            // spend entrance time on a row bounce or a descent clock.
             return false;
         }
         const reachedPlayer = () => aliens.some(alien => (alien.body as Phaser.Physics.Arcade.Body).bottom >= defensiveLine);
@@ -226,7 +248,7 @@ export class AlienManager {
             // Keep Arcade collision bounds in sync with the visible formation.
             const body = alien.body as Phaser.Physics.Arcade.Body;
             const nextY = this.configuration.formation === 'TWIN_SQUADS' ?
-                this.twinSpawnY.get(alien) + this.twinVerticalOffset : alien.y + y;
+                this.twinSpawnY.get(alien) + this.twinVerticalOffset - this.entranceRemaining : alien.y + y;
             body.reset(alien.x + x, nextY);
             // Phaser 3.22 reset() ignores custom offsets until preUpdate.
             body.preUpdate(false, 0);
@@ -241,6 +263,7 @@ export class AlienManager {
         this.direction = config.initialDirection;
         this.twinDescentElapsedMs = 0;
         this.twinVerticalOffset = 0;
+        this.entranceRemaining = 0;
         this.twinSpawnY.clear();
         this.rows = (config.rowGroups || []).map(row => ({ ...row, aliens: [],
             direction: row.initialDirection, initialEntityCount: 0, bounceCount: 0,
@@ -268,6 +291,12 @@ export class AlienManager {
             (this.aliens.getChildren() as Alien[]).forEach(alien => this.twinSpawnY.set(alien, alien.y));
         this.initialEntityCount = this.aliens.getChildren().length;
         groups.forEach(squad => squad.initialEntityCount = squad.aliens.length);
+        const aliens = this.aliens.getChildren() as Alien[];
+        this._move(aliens, 0, 0);
+        const bottom = Math.max(bounds.top, ...aliens.map(alien => Math.max(alien.getBounds().bottom,
+            (alien.body as Phaser.Physics.Arcade.Body).bottom)));
+        this.entranceRemaining = bottom - bounds.top + WaveDirectorConfig.formation.entrance.clearance;
+        this._move(aliens, 0, -this.entranceRemaining);
     }
 
     updatePremiums(delta: number, player: Phaser.Physics.Arcade.Sprite, damage: () => void) {
@@ -275,7 +304,7 @@ export class AlienManager {
             const premium = premiumInvaderOf(alien);
             if (premium && alien.active && player.active) {
                 premium.update(delta);
-                premium.updateWeapons(delta, player, damage);
+                if (this.canAttack(alien)) premium.updateWeapons(delta, player, damage);
             }
         });
     }

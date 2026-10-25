@@ -65,8 +65,9 @@ async function serve(route) {
   for(const renderer of ['canvas','webgl']){
    await page.goto('http://mubarak.test/?'+renderer);
    await page.waitForFunction(()=>window.testGame&&testGame.scene.scenes[0]&&testGame.scene.scenes[0].alienManager);
+   await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'helpers/active-wave-fixture.js'),'utf8')});
    reports.push(await page.evaluate(renderer=>{
-    testGame.loop.stop();const s=testGame.scene.scenes[0],D=load('src/interface/wave-director'),M=load('src/interface/mubarak'),W=load('src/interface/wojak-boss'),A=load('src/interface/assets').AssetType;
+    testGame.loop.stop();installActiveWaveFixture(testGame.scene.scenes[0]);const s=testGame.scene.scenes[0],D=load('src/interface/wave-director'),M=load('src/interface/mubarak'),W=load('src/interface/wojak-boss'),A=load('src/interface/assets').AssetType;
     const check=(v,l)=>{if(!v)throw Error(l);};
     check(M.MubarakSettings.testSpawn.enabled&&M.MubarakSettings.testSpawn.afterWave===1,'temporary Wave 1 Mubarak override enabled');
     check(s.wave===1&&s.state==='playing'&&!s.mubarak,'Wave 1 starts normally');

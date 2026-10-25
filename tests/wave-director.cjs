@@ -128,7 +128,7 @@ assert.equal(c.firing.maxHostileThreats,15);
 assert(!('minimumIntervalMs' in c.firing)&&!('halfProgressWaveOffset' in c.firing),'old progression removed');
 for(const wave of [10,20,30])assert(isBossMilestone(wave));assert(!isBossMilestone(0));assert(!isBossMilestone(11));
 assert.equal(waveSeedFromSearch('?waveSeed=0'),0);assert.equal(waveSeedFromSearch('?x=1&waveSeed=42'),42);
-for(const query of ['', '?waveSeed=no', '?waveSeed=-1','?waveSeed=4294967296'])assert.equal(waveSeedFromSearch(query),c.seed);
+for(const query of ['', '?waveSeed=no', '?waveSeed=-1','?waveSeed=4294967296'])assert.equal(waveSeedFromSearch(query,()=>123),123);
 assert.throws(()=>getWavePlan(0));assert.throws(()=>getWavePlan(1.5));assert.throws(()=>getWavePlan(Infinity));
 // Adding an existing implemented enemy to a new registry slot needs no director logic.
 const old=c.introductions.slice();c.introductions.push({type:'future-implemented-type',wave:11});
@@ -141,3 +141,22 @@ for(const formation of ['grid','diamond','TWIN_SQUADS','SNAKE']){
 }
 c.formation.choices=['grid','diamond','TWIN_SQUADS','SNAKE'];
 console.log('PASS: anchored movement, exact five-wave firing cycle, unchanged threat cap, unlocks, bosses and seed handling.');
+
+// Fresh-run entropy is controlled in tests; explicit seeds never consume it.
+let entropyCalls=0;const entropy=()=>++entropyCalls*101;
+assert.equal(waveSeedFromSearch('',entropy),101);assert.equal(waveSeedFromSearch('',entropy),202);
+assert.equal(waveSeedFromSearch('?waveSeed=0',entropy),0);assert.equal(entropyCalls,2);
+assert.equal(waveSeedFromSearch('?waveSeed=4294967295',entropy),4294967295);
+const streams=[101,202].map(seed=>Array.from({length:100},(_,i)=>getWavePlan(i+1,seed).formation));
+assert.notEqual(JSON.stringify(streams[0]),JSON.stringify(streams[1]));
+assert.equal(JSON.stringify(streams[0]),JSON.stringify(Array.from({length:100},(_,i)=>getWavePlan(i+1,101).formation)));
+assert.equal(c.formation.entrance.speed,180);assert.equal(c.formation.entrance.clearance,1);
+console.log('PASS: fresh injectable run seeds; explicit zero/max seeds, no entropy draw on replay, distinct/reproducible plans, entrance constants.');
+
+// Exercise both entropy-provider branches without relying on random outcomes.
+const directorCode=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../src/interface/wave-director.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2015}}).outputText;
+const entropyModule={exports:{}},entropyContext={module:entropyModule,exports:entropyModule.exports,require:()=>({EnemyType:{Pepe:'pepe',Ponke:'ponke',Popcat:'popcat'}}),crypto:{getRandomValues(values){assert.equal(values.length,1);values[0]=0xfedcba98;return values}}};
+vm.runInNewContext(directorCode,entropyContext);assert.equal(entropyModule.exports.createGameplaySeed(),0xfedcba98);
+delete entropyContext.crypto;entropyContext.Math=Object.create(Math);entropyContext.Math.random=()=>.25;
+assert.equal(entropyModule.exports.createGameplaySeed(),1073741824);
+console.log('PASS: Web Crypto seed provider and dependency-free fallback with controlled entropy.');

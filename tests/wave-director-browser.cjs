@@ -68,8 +68,9 @@ async function serve(route) {
   for(const renderer of ['webgl','canvas']) {
    await page.goto('http://wojak.test/?waveSeed=12345'+(renderer==='canvas'?'&canvas':''));
    await page.waitForFunction(()=>window.testGame&&testGame.scene.scenes[0].player);
+   await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'helpers/active-wave-fixture.js'),'utf8')});
    const report=await page.evaluate(()=>{
-    testGame.loop.stop();const s=testGame.scene.scenes[0];
+    testGame.loop.stop();installActiveWaveFixture(testGame.scene.scenes[0]);const s=testGame.scene.scenes[0];
     if(!(s.firingTimer>s.time.now&&s.firingTimer-s.time.now<=1610))throw Error('initial wave waits for configured timer');
     s.restart();
     const d=load('src/interface/wave-director'),check=(ok,label)=>{if(!ok)throw Error(label);};
@@ -198,7 +199,8 @@ async function serve(route) {
      s._enemyFires();check(s.bananaBombs.activeThreatCount===1,'PONKE cannot bypass cap');
     } finally {Phaser.Math.RND.frac=oldFrac;}
     const bosses=[];
-    for(const wave of [10,20,30]) {
+    // Odd checkpoints use Wojak; Mubarak parity is covered by boss-schedule.
+    for(const wave of [10,30,50]) {
      s.restart();s.wave=wave;s.state='waveTransition';s.nextWaveReadyAt=0;s.firingTimer=Infinity;
      s._startNextWave();check(s.state==='bossEncounter'&&s.wave===wave,'boss separate from regular number');
      check(s.firingTimer===Infinity,'regular firing disabled throughout boss');

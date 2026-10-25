@@ -68,8 +68,9 @@ async function serve(route) {
   for(const renderer of ['webgl','canvas']) {
    await page.goto('http://wojak.test/?waveSeed=12345'+(renderer==='canvas'?'&canvas':''));
    await page.waitForFunction(()=>window.testGame&&testGame.scene.scenes[0].player);
+   await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'helpers/active-wave-fixture.js'),'utf8')});
    const report=await page.evaluate(()=>{
-    testGame.loop.stop();const s=testGame.scene.scenes[0],m=s.alienManager;
+    testGame.loop.stop();installActiveWaveFixture(testGame.scene.scenes[0]);const s=testGame.scene.scenes[0],m=s.alienManager;
     const d=load('src/interface/wave-director'),A=load('src/interface/assets').AssetType;
     const check=(ok,label)=>{if(!ok)throw Error(label);},near=(a,b,label)=>check(Math.abs(a-b)<1e-5,label+': '+a+' != '+b);
     const owner=()=>m.aliens.getChildren().find(a=>a.premium).premium;

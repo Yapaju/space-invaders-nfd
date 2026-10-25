@@ -68,8 +68,9 @@ async function serve(route) {
   for(const renderer of ['webgl','canvas']){
    await page.goto('http://wojak.test/?waveSeed=0'+(renderer==='canvas'?'&canvas':''));
    await page.waitForFunction(()=>window.testGame&&testGame.scene.scenes[0].player);
+   await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'helpers/active-wave-fixture.js'),'utf8')});
    const report=await page.evaluate(()=>{
-    testGame.loop.stop();const s=testGame.scene.scenes[0],m=s.alienManager,d=load('src/interface/wave-director'),planner=load('src/interface/premium-spawn').planPremiumFormation;
+    testGame.loop.stop();installActiveWaveFixture(testGame.scene.scenes[0]);const s=testGame.scene.scenes[0],m=s.alienManager,d=load('src/interface/wave-director'),planner=load('src/interface/premium-spawn').planPremiumFormation;
     const check=(ok,label)=>{if(!ok)throw Error(label);},near=(a,b,label)=>check(Math.abs(a-b)<1e-5,label+': '+a+' != '+b);
     const seedFor=(direction,wave=1)=>{let seed=0;while(d.getWavePlan(wave,seed).formation!=='TWIN_SQUADS'||d.getWavePlan(wave,seed).initialDirection!==direction)seed++;return seed;};
     const reset=(seed=seedFor(1),wave=1,premium=false)=>{d.WaveDirectorConfig.premiumInvaders.testMode.enabled=premium;m.seed=seed;s.restart();if(wave!==1){s.wave=wave;s.scoreManager.setWave(wave);m.reset(wave);}return m.rows;};
