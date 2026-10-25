@@ -68,11 +68,13 @@ async function serve(route) {
    reports.push(await page.evaluate(renderer=>{
     testGame.loop.stop();const s=testGame.scene.scenes[0],D=load('src/interface/wave-director'),M=load('src/interface/mubarak'),W=load('src/interface/wojak-boss'),A=load('src/interface/assets').AssetType;
     const check=(v,l)=>{if(!v)throw Error(l);};
-    check(!M.MubarakSettings.testSpawn.enabled,'production early Mubarak override disabled');
+    check(M.MubarakSettings.testSpawn.enabled&&M.MubarakSettings.testSpawn.afterWave===1,'temporary Wave 1 Mubarak override enabled');
+    check(s.wave===1&&s.state==='playing'&&!s.mubarak,'Wave 1 starts normally');
     for(let wave=1;wave<=10000;wave++)check(D.bossForWave(wave)===(wave%10?undefined:wave%20?'wojak':'mubarak'),'unbounded parity schedule '+wave);
     check(D.bossForWave(0)===undefined,'no wave0 boss');
     const checkpoint=wave=>{s.wave=wave;s.alienManager.aliens.clear(true,true);s.assetManager.bullets.clear(true,true);s.state='waveTransition';s.nextWaveReadyAt=s.time.now;s._startNextWave();};
     const shoot=(x,y)=>{const b=s.assetManager.bullets.get();b.enableBody(true,x,y,true,true);b.shoot(x,y);b.body.preUpdate(false,0);s.update(undefined,0);return b;};
+    M.MubarakSettings.testSpawn.enabled=false; // Single-flag restoration of production rotation.
     for(const wave of [1,2,9,11,19,21,29,31,39,41,49,51,59,61]){
      s.restart();checkpoint(wave);check(s.state==='playing'&&s.wave===wave+1&&(!s.wojak||!s.wojak.sprite)&&(!s.mubarak||!s.mubarak.sprite),'ordinary wave no boss '+wave);
     }
@@ -85,9 +87,18 @@ async function serve(route) {
     s._startNextWave();check(s.state==='waveTransition'&&!s.wojak,'1500ms delay retained');
     s.nextWaveReadyAt=s.time.now;const trailing=s.assetManager.bullets.get();trailing.enableBody(true,20,400,true,true);s._startNextWave();check(s.state==='waveTransition','trailing player bullet gate retained');trailing.destroy();
     const sequence=[];
-    for(const wave of [10,20,30,40,50,60]){
-     if(wave===10)s._startNextWave();else checkpoint(wave);
-     const kind=D.bossForWave(wave),expected=kind==='wojak'?'bossEncounter':'mubarakEncounter';
+    M.MubarakSettings.testSpawn.enabled=true;
+    for(const wave of [1,10,20,30,40,50,60]){
+     if(wave===1){
+      s.restart();
+      for(const alien of s.alienManager.aliens.getChildren().slice()){
+       const b=s.assetManager.bullets.get();b.enableBody(true,alien.x,alien.y,true,true);s._bulletHitAliens(b,alien);drain();
+      }
+      check(s.state==='waveTransition'&&s.wave===1&&s.invadersKilled===24,'real Wave 1 completion');
+      s._startNextWave();check(s.state==='waveTransition'&&(!s.mubarak||!s.mubarak.sprite),'early override retains transition delay');
+      s.nextWaveReadyAt=s.time.now;s.assetManager.bullets.clear(true,true);s._startNextWave();
+     }else checkpoint(wave);
+     const kind=wave===1?'mubarak':D.bossForWave(wave),expected=kind==='wojak'?'bossEncounter':'mubarakEncounter';
      check(s.state===expected&&s.wave===wave,'correct encounter '+wave);
      const boss=kind==='wojak'?s.wojak:s.mubarak,root=boss.sprite;
      s._startNextWave();if(kind==='wojak')s._startWojak();else s._startMubarak();
@@ -108,15 +119,21 @@ async function serve(route) {
       check(boss.explosion.texture.key==='mubarak-act1-explosion-3'&&root.texture.key.indexOf('mubarak-act2-1-')===0,'V1 climax and angry art');
       boss.update(M.mubarakFinalDuration()-135);check(boss.phase==='act2'&&boss.shrapnel.emitted===100&&s.playerShootingEnabled,'V1 Act II and100-diamond event preserved');
       boss.shrapnel.clear(); // Simulate cleared diamonds; the existing position gate unlocks normally.
-      const health=boss.act2Health;shoot(root.x,root.y);check(boss.act2Health===health,'V1 direct laser immunity');
+      const health=boss.act2Health;check(health===3,'Act II starts with three health');shoot(root.x,root.y);check(boss.act2Health===health,'V1 direct laser immunity');
       const random=boss.barrels.random;boss.barrels.random=()=>.05;
-      for(let i=0;i<4;i++){
-       boss.barrels.spawn();const f=boss.barrels.flights[boss.barrels.flights.length-1];check(f.shootable,'real V1.1 shootable-red branch');f.sprite.setPosition(root.x,root.y+50);
-       const r=boss.barrels.bounds(f.sprite);check(!shoot(r.x+r.width/2,r.y+r.height/2).active&&boss.act2Health===3-i,'existing red-barrel indirect damage');
-       if(i<3)s.update(undefined,800);
+      for(let i=0;i<3;i++){
+       boss.barrels.spawn();const f=boss.barrels.flights[boss.barrels.flights.length-1];check(f.shootable&&f.sprite.texture.key==='mubarak-barel-yellow'&&!f.sprite.isTinted,'original-color yellow explosive branch');f.sprite.setPosition(root.x,root.y+50);
+       const r=boss.barrels.bounds(f.sprite);check(!shoot(r.x+r.width/2,r.y+r.height/2).active&&boss.act2Health===2-i,'existing yellow-barrel indirect damage');
+       check(boss.phase===(i<2?'act2':'act3Entry'),'exactly three accepted hits trigger Act III');
+       if(i<2)s.update(undefined,800);
       }
-      check(boss.phase==='defeat'&&boss.barrels.flights.length===0,'working V1 four-hit completion');boss.barrels.random=random;
+      check(boss.phase==='act3Entry'&&boss.barrels.flights.length===0,'three-hit Act II completion');boss.barrels.random=random;
       s.update(undefined,799);check(s.state===expected,'full800ms V1 defeat flash');s.update(undefined,1);
+      check(boss.phase==='act3'&&boss.cz&&s.state===expected&&s.completedBossWave!==wave,'CZ encounter precedes victory');
+      boss.sprite.x=204;boss.cz.x=600;
+      for(let i=0;i<2;i++){boss.sprite.x=204;boss.cz.x=600;const r=boss.czBounds();shoot(r.x+r.width/2,r.y+r.height/2);if(!i)boss.update(M.MubarakAct3Settings.czInvulnerabilityMs);}
+      check(boss.phase==='escape'&&boss.czHits===2,'two exposed CZ hits');
+      for(let i=0;i<500&&s.state===expected;i++)s.update(undefined,10);
      }
      check(s.state==='waveTransition'&&s.completedBossWave===wave&&!root.active,'checkpoint victory recorded once '+wave);
      check(s.scoreManager.score===score&&s.invadersKilled===kills&&s.scoreManager.lives.countActive(true)===2,'boss adds no invented score/life reward');
@@ -139,6 +156,6 @@ async function serve(route) {
    },renderer));
   }
   assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'boss-schedule-browser.json'),JSON.stringify(reports,null,2));
-  console.log('PASS: Canvas/WebGL actual Wojak/Mubarak victories and next waves10->11,20->21,30->31,40->41,50->51,60->61; parity through10000, ordinary waves, no duplicates, delay/bullet gates, scoring/lives/Premium unlock, assets/V1 mechanics, game over and restart.');
+  console.log('PASS: Canvas/WebGL Wave1->Mubarak->2, restored ordinary Wave1->2; Wojak/Mubarak victories10->11,20->21,30->31,40->41,50->51,60->61; parity through10000, no duplicates, delay/bullet gates, scoring/lives/Premium unlock, yellow assets/V1 mechanics, game over and restart.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

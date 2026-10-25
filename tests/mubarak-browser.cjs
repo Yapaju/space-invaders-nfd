@@ -225,7 +225,7 @@ async function serve(route) {
     check(root.texture.key===pose&&pose.indexOf('mubarak-act2-1-')===0,'angry pose persists without reverting or recreating sprite');
     s.assetManager.bullets.clear(true,true);s._startNextWave();s.update(undefined,0);
     check(!s.completedMubarak&&s.wave===1&&s.state==='mubarakEncounter'&&s.alienManager.aliens.countActive(true)===0,'Act II combat keeps encounter on screen');
-    check(p.sprite===root&&root.visible&&root.active&&root.texture.key===pose&&!p.explosion&&!p.hit()&&s.playerShootingEnabled&&p.act2Health===4&&p.barrels.flights.length===0,'no flicker; direct immunity and combat start only after cinematic');
+    check(p.sprite===root&&root.visible&&root.active&&root.texture.key===pose&&!p.explosion&&!p.hit()&&s.playerShootingEnabled&&p.act2Health===3&&p.barrels.flights.length===0,'no flicker; direct immunity and three-hit combat start only after cinematic');
     testGame.renderer.preRender();s.sys.render(testGame.renderer);testGame.renderer.postRender();
     check(s.scoreManager.score===score&&s.invadersKilled===kills,'no new score/reward/kill from cinematic');
     check(!s.premiumProgress.eligible('wojak',100),'no Premium unlock');

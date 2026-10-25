@@ -2,11 +2,17 @@ import { MubarakBarrels, MubarakBarrelSettings, MubarakRect, rectsOverlap } from
 import { randomForWave, WaveDirectorConfig } from './wave-director';
 import { WojakSettings } from './wojak-boss';
 import { applyHitFlash } from './hit-flash';
-import { AssetType } from './assets';
+import { AssetType, SoundType } from './assets';
 import { MubarakShrapnel } from './mubarak-shrapnel';
+import { Kaboom } from './kaboom';
+import { AnimationType } from './factory/animation-factory';
+import { AudioBalance } from './audio-balance';
+
+export const CZ_HIT_EXPLOSION_SCALE_MULTIPLIER = 1.5;
 
 export const MubarakSettings = {
-    testSpawn: { enabled: false, afterWave: 1 },
+    // Temporary local playtest: set enabled=false to restore checkpoint-only rotation.
+    testSpawn: { enabled: true, afterWave: 1 },
     canvasWidth: 1664, canvasHeight: 1216, displayWidth: 360,
     entranceMs: 3600, patrolY: 190, edgeMargin: 24, cruisePeriodMs: 14000,
     waveAmplitude: 14, wavePeriodMs: 7000, bobAmplitude: 3, bobPeriodMs: 2200,
@@ -19,10 +25,118 @@ export const MubarakSettings = {
 };
 
 export const MubarakAct2Settings = {
-    health: 4, horizontalSpeedMultiplier: 2, stepMs: 1000 / 120,
+    health: 3, horizontalSpeedMultiplier: 2, stepMs: 1000 / 120,
     // Registered canvas bounds measured at alpha >=128 in both angry sources.
     visibleBody: { x: 86, y: 90, width: 1492, height: 1011 }
 };
+
+// Act III prototype: lane centers are relative to the playable world's top.
+export const MubarakAct3Settings = {
+    mubarakLaneY: 260, czLaneY: 100, czDisplayWidth: 130,
+    mubarakSpeed: 120, czSpeed: 90, edgeMargin: 24,
+    escapeInitialSpeed: 360, escapeAcceleration: 600, successfulHits: 2,
+    bnbPumpIntervalMs: 3000, bnbCoinSpeed: 180, bnbCoinSize: 28, bnbMaxActiveCoins: 3,
+    growthPerPump: 0.08, maxScaleMultiplier: 1.48, growthTweenMs: 200,
+    collapseDurationMs: 2000, stepMs: 1000 / 120,
+    czPumpOrigin: { x: 650, y: 450 },
+    czInvulnerabilityMs: 800, blockingAlphaThreshold: 128, czAlphaThreshold: 16,
+    blackDiamondIntervalsMs: [2500, 2000, 1500, 1000],
+    blackDiamondOrigin: { x: 832, y: 1100 },
+    blackDiamondAnglesDegrees: [-40, -20, 0, 20, 40],
+    czHitExplosionOrigin: { x: 650, y: 400 }
+};
+export const MubarakBNBAsset = { key: 'mubarak-cz-bnb-coin',
+    path: 'mini-boss/mubarak/mubarak-cz-bnb-coin.png' };
+
+// Time of first contact for a moving point and an axis-aligned rectangle.
+// Expand the rectangle by the projectile shape before calling this helper.
+function segmentRectContact(x: number, y: number, endX: number, endY: number, rect: MubarakRect) {
+    let enter = 0, exit = 1;
+    const axes = [[x, endX - x, rect.x, rect.x + rect.width],
+        [y, endY - y, rect.y, rect.y + rect.height]];
+    for (const [start, distance, min, max] of axes) {
+        if (Math.abs(distance) < 1e-10) {
+            if (start < min || start > max) return Infinity;
+        } else {
+            const a = (min - start) / distance, b = (max - start) / distance;
+            enter = Math.max(enter, Math.min(a, b));
+            exit = Math.min(exit, Math.max(a, b));
+            if (enter > exit) return Infinity;
+        }
+    }
+    return enter;
+}
+
+function smoothStep(t: number) { return t * t * (3 - 2 * t); }
+type BNBCoin = { sprite: Phaser.GameObjects.Image; vx: number; vy: number };
+
+type MubarakAlpha = { width: number; height: number; alpha: Uint8Array };
+const mubarakAlphaCache = new WeakMap<Phaser.Textures.Texture, MubarakAlpha>();
+function cacheMubarakAlpha(texture: Phaser.Textures.Texture) {
+    let cached = mubarakAlphaCache.get(texture);
+    if (cached) return cached;
+    // Read registered canvases or original PNGs once, retaining only alpha bytes.
+    const source = texture.getSourceImage() as HTMLCanvasElement | HTMLImageElement;
+    const canvas = source instanceof HTMLCanvasElement ? source : document.createElement('canvas');
+    if (canvas !== source) {
+        canvas.width = source.width; canvas.height = source.height;
+        canvas.getContext('2d').drawImage(source, 0, 0);
+    }
+    const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    const alpha = new Uint8Array(canvas.width * canvas.height);
+    for (let i = 0; i < alpha.length; i++) alpha[i] = pixels[i * 4 + 3];
+    cached = { width: canvas.width, height: canvas.height, alpha };
+    mubarakAlphaCache.set(texture, cached);
+    return cached;
+}
+
+// Exact source-pixel filtering for the encounter's unrotated, vertical player beams.
+// Return first-contact time along the beam's swept rectangle, or Infinity.
+export function mubarakOpaqueContact(sprite: Phaser.GameObjects.Sprite, body: MubarakRect & {
+    prev?: { y: number }; velocity?: { y: number }
+}, threshold = MubarakAct3Settings.blockingAlphaThreshold) {
+    const previousY = body.prev && body.velocity && body.velocity.y < 0 ? Math.max(body.y, body.prev.y) : body.y;
+    const sweep = { x: body.x, y: body.y, width: body.width, height: body.height + previousY - body.y };
+    if (!sprite.scaleX || !sprite.scaleY || !rectsOverlap(sweep, sprite.getBounds())) return Infinity;
+    const mask = cacheMubarakAlpha(sprite.texture), sx = sprite.scaleX, sy = sprite.scaleY;
+    const localX = (x: number) => (x - sprite.x) / sx + sprite.originX * sprite.width;
+    const localY = (y: number) => (y - sprite.y) / sy + sprite.originY * sprite.height;
+    const x1 = localX(sweep.x), x2 = localX(sweep.x + sweep.width);
+    const y1 = localY(sweep.y), y2 = localY(sweep.y + sweep.height);
+    const left = Math.max(0, Math.floor(Math.min(x1, x2))), right = Math.min(mask.width - 1, Math.ceil(Math.max(x1, x2)) - 1);
+    const top = Math.max(0, Math.floor(Math.min(y1, y2))), bottom = Math.min(mask.height - 1, Math.ceil(Math.max(y1, y2)) - 1);
+    // Visit world-space rows from bottom to top, covering every occupied beam
+    // column, not just its center. Flip only the alpha lookup, matching rendering.
+    const first = sy > 0 ? bottom : top, last = sy > 0 ? top : bottom, step = sy > 0 ? -1 : 1;
+    for (let y = first; sy > 0 ? y >= last : y <= last; y += step) {
+        const row = (sprite.flipY ? mask.height - 1 - y : y) * mask.width;
+        for (let x = left; x <= right; x++) {
+            const column = sprite.flipX ? mask.width - 1 - x : x;
+            if (mask.alpha[row + column] < threshold) continue;
+            const edge1 = sprite.y + (y - sprite.originY * sprite.height) * sy;
+            const edge2 = edge1 + sy, worldBottom = Math.max(edge1, edge2);
+            return previousY > body.y ? Math.max(0, (previousY - worldBottom) / (previousY - body.y)) : 0;
+        }
+    }
+    return Infinity;
+}
+export function mubarakCZTexture(frame: number, direction: number) {
+    return `mubarak-cz-${frame}-${direction < 0 ? 'left' : 'right'}`;
+}
+export const MubarakCZAssets = [1, 2, 3].reduce((assets, frame) => assets.concat(
+    [-1, 1].map(direction => {
+        const key = mubarakCZTexture(frame, direction);
+        return { key, path: `mini-boss/mubarak/${key}.png` };
+    })), [] as { key: string; path: string }[]);
+
+// Reflect any overshoot, including long frames, without leaving the lane.
+export function mubarakPatrol(x: number, direction: -1 | 1, distance: number, left: number, right: number) {
+    const span = right - left;
+    if (span <= 0) return { x: (left + right) / 2, direction };
+    const phase = ((direction > 0 ? x - left : 2 * span - (x - left)) + distance) % (2 * span);
+    return { x: left + (phase < span ? phase : 2 * span - phase),
+        direction: (phase < span ? 1 : -1) as -1 | 1 };
+}
 
 // Native 3:2 overlays; widths are relative to the boss's tunable display width.
 export const MubarakFinalSettings = {
@@ -104,6 +218,8 @@ export function prepareMubarak(scene: Phaser.Scene) {
         canvas.context.drawImage(image, pose.x, pose.y, image.width * pose.scale, image.height * pose.scale);
         canvas.refresh();
     });
+    [-1, 1].forEach(direction => cacheMubarakAlpha(scene.textures.get(mubarakTexture(1, direction, 2))));
+    MubarakCZAssets.forEach(asset => cacheMubarakAlpha(scene.textures.get(asset.key)));
 }
 
 // Same duration calculation and configuration as Premium Wojak; no copied timings.
@@ -160,6 +276,24 @@ export function reflectDiamondLaser(polygon: { x: number; y: number }[],
 
 export class MubarakEncounter {
     sprite: Phaser.GameObjects.Sprite;
+    cz: Phaser.GameObjects.Sprite;
+    czHits = 0;
+    czDirection: -1 | 1 = -1;
+    private czEscapeSpeed = 0;
+    private czFlashElapsed = MubarakAct3Settings.czInvulnerabilityMs;
+    readonly czHitExplosions: Kaboom[] = [];
+    act3Diamonds: MubarakShrapnel;
+    private diamondElapsed = 0;
+    readonly bnbCoins: BNBCoin[] = [];
+    act3Pumps = 0;
+    private pumpElapsed = 0;
+    private act3BaseScale = 0;
+    private act3Bottom = 0;
+    private growthFrom = 1;
+    private growthTo = 1;
+    private growthElapsed = 0;
+    private collapseElapsed = 0;
+    private collapseScale = 0;
     explosion: Phaser.GameObjects.Image;
     barrels: MubarakBarrels;
     shrapnel: MubarakShrapnel;
@@ -179,16 +313,18 @@ export class MubarakEncounter {
     hits = 0;
     direction: -1 | 1 = 1;
     private entranceDirection: -1 | 1 = 1;
-    phase: 'entrance' | 'cruise' | 'clearing' | 'final' | 'act2' | 'defeat' | 'complete' | 'removed' = 'removed';
+    phase: 'entrance' | 'cruise' | 'clearing' | 'final' | 'act2' | 'act3Entry' | 'act3' | 'escape' | 'collapse' | 'complete' | 'removed' = 'removed';
     private entranceElapsed = 0;
     private cruiseElapsed = 0;
     private finalElapsed = 0;
     private flashElapsed = premiumHitDuration();
     constructor(private scene: Phaser.Scene, private awardScore: (points: number) => void = () => {}) {}
-    get invulnerable() { return this.flashElapsed < premiumHitDuration(); }
-    get shootingEnabled() { return this.phase === 'cruise' || this.phase === 'act2'; }
+    get act3Active() { return this.phase === 'act3' || this.phase === 'escape'; }
+    get czInvulnerable() { return this.czFlashElapsed + 1e-7 < MubarakAct3Settings.czInvulnerabilityMs; }
+    get invulnerable() { return this.act3Active || this.phase === 'collapse' || this.phase === 'act3Entry' || this.flashElapsed < premiumHitDuration(); }
+    get shootingEnabled() { return this.phase === 'cruise' || this.phase === 'act2' || this.act3Active; }
     get act2Visible() {
-        return this.phase === 'act2' || this.phase === 'defeat' || (this.phase === 'final' && this.finalElapsed >= mubarakAct2SwitchTime());
+        return this.phase === 'act2' || this.phase === 'act3Entry' || this.act3Active || this.phase === 'collapse' || (this.phase === 'final' && this.finalElapsed >= mubarakAct2SwitchTime());
     }
     get frame() {
         return this.act2Visible ? MubarakFinalSettings.act2CharacterFrame :
@@ -220,13 +356,14 @@ export class MubarakEncounter {
             return false;
         }
         if (this.phase === 'act2') return this.updateAct2(delta, player, damagePlayer);
-        if (this.phase === 'defeat') {
+        if (this.act3Active || this.phase === 'collapse') return this.updateAct3(Math.max(0, delta), player, damagePlayer);
+        if (this.phase === 'act3Entry') {
+            const remaining = Math.max(0, delta - (premiumHitDuration() - this.flashElapsed));
             this.flashElapsed = Math.min(premiumHitDuration(), this.flashElapsed + Math.max(0, delta));
             this.barrels.step(Math.max(0, delta));
             if (this.flashElapsed >= premiumHitDuration()) {
-                this.clear();
-                this.phase = 'complete';
-                return true;
+                this.beginAct3();
+                return this.updateAct3(remaining, player, damagePlayer);
             }
             this.showFlash();
             return false;
@@ -383,10 +520,227 @@ export class MubarakEncounter {
         this.flashElapsed = 0;
         this.showFlash();
         if (this.act2Health === 0) {
-            this.phase = 'defeat';
+            this.phase = 'act3Entry';
             this.barrels.stop();
         }
         return true;
+    }
+    private beginAct3() {
+        if (this.barrels) this.barrels.clear();
+        this.barrels = undefined;
+        if (this.shrapnel) this.shrapnel.clear();
+        this.shrapnel = undefined;
+        this.ricochets.splice(0).forEach(shot => shot.sprite.destroy());
+        this.phase = 'act3';
+        this.czHits = 0;
+        this.czEscapeSpeed = 0;
+        this.czDirection = this.direction > 0 ? -1 : 1;
+        const world = this.scene.physics.world.bounds, config = MubarakAct3Settings;
+        this.sprite.y = world.top + config.mubarakLaneY;
+        this.act3BaseScale = this.sprite.scaleX;
+        this.act3Bottom = this.sprite.y + this.sprite.displayHeight / 2;
+        this.act3Pumps = this.pumpElapsed = 0;
+        this.diamondElapsed = 0;
+        this.czFlashElapsed = config.czInvulnerabilityMs;
+        this.act3Diamonds = new MubarakShrapnel(this.scene,
+            randomForWave(this.encounterSeed ^ 0x44494133, this.encounterWave), () => {});
+        this.growthFrom = this.growthTo = 1;
+        this.growthElapsed = config.growthTweenMs;
+        this.sprite.clearTint();
+        this.cz = this.scene.add.sprite(this.sprite.x, world.top + config.czLaneY,
+            mubarakCZTexture(1, this.czDirection)).setOrigin(0.5).setDepth(this.sprite.depth - 1);
+        this.cz.setScale(config.czDisplayWidth / this.cz.width);
+        this.syncArtwork();
+    }
+    private updateAct3(delta: number, player?: Phaser.Physics.Arcade.Sprite, damagePlayer?: () => void) {
+        // Small bounded steps keep moving-coin contacts and expanding boundaries
+        // stable on long frames. All clocks belong to the encounter, not timers.
+        let remaining = delta;
+        do {
+            const step = Math.min(remaining, MubarakAct3Settings.stepMs);
+            if (this.stepAct3(step, player, damagePlayer)) return true;
+            remaining -= step;
+        } while (remaining > 1e-7 && this.sprite);
+        return false;
+    }
+    private stepAct3(delta: number, player?: Phaser.Physics.Arcade.Sprite, damagePlayer?: () => void): boolean {
+        if (this.phase === 'collapse') return this.updateCollapse(delta);
+        const world = this.scene.physics.world.bounds, config = MubarakAct3Settings;
+        this.czFlashElapsed = Math.min(config.czInvulnerabilityMs, this.czFlashElapsed + delta);
+        if (config.czInvulnerabilityMs - this.czFlashElapsed < 1e-7) this.czFlashElapsed = config.czInvulnerabilityMs;
+        this.updateGrowth(delta);
+        const patrol = (sprite: Phaser.GameObjects.Sprite, direction: -1 | 1, speed: number) =>
+            mubarakPatrol(sprite.x, direction, speed * delta / 1000,
+                world.left + sprite.displayWidth / 2 + config.edgeMargin,
+                world.right - sprite.displayWidth / 2 - config.edgeMargin);
+        const lower = patrol(this.sprite, this.direction, config.mubarakSpeed);
+        this.sprite.x = lower.x;
+        this.direction = lower.direction;
+        this.syncArtwork();
+        if (this.phase === 'escape') {
+            const seconds = delta / 1000;
+            this.cz.x += this.czDirection * (this.czEscapeSpeed * seconds + config.escapeAcceleration * seconds * seconds / 2);
+            this.czEscapeSpeed += config.escapeAcceleration * seconds;
+            if (this.czDirection > 0 ? this.cz.x - this.cz.displayWidth / 2 > world.right :
+                this.cz.x + this.cz.displayWidth / 2 < world.left) {
+                this.beginCollapse();
+                return false;
+            }
+        } else {
+            const upper = patrol(this.cz, this.czDirection, config.czSpeed);
+            this.cz.x = upper.x;
+            this.czDirection = upper.direction;
+        }
+        const key = mubarakCZTexture(this.czHits + 1, this.czDirection);
+        if (this.cz.texture.key !== key) this.cz.setTexture(key);
+        this.showCZFlash();
+        if (this.phase === 'act3') {
+            this.updateCoins(delta);
+            this.pumpElapsed += delta;
+            if (this.pumpElapsed + 1e-7 >= config.bnbPumpIntervalMs) {
+                this.pumpElapsed = Math.max(0, this.pumpElapsed - config.bnbPumpIntervalMs);
+                this.launchBNB();
+            }
+            this.act3Diamonds.step(delta, player, damagePlayer);
+            if (!this.sprite) return false; // Last-life impact may clear the encounter.
+            this.diamondElapsed += delta;
+            const intervals = config.blackDiamondIntervalsMs;
+            const interval = intervals[Math.min(intervals.length - 1, Math.floor(this.act3Pumps / 2))];
+            if (this.diamondElapsed + 1e-7 >= interval) {
+                this.diamondElapsed = Math.max(0, this.diamondElapsed - interval);
+                const origin = config.blackDiamondOrigin;
+                const x = this.direction < 0 ? this.sprite.width - origin.x : origin.x;
+                this.act3Diamonds.fireBlack(this.sprite.x + (x - this.sprite.width / 2) * this.sprite.scaleX,
+                    this.sprite.y + (origin.y - this.sprite.height / 2) * this.sprite.scaleY,
+                    config.blackDiamondAnglesDegrees);
+            }
+        }
+        return false;
+    }
+    private showCZFlash() {
+        applyHitFlash([this.cz], Math.round(this.czFlashElapsed * 1e6) / 1e6, MubarakAct3Settings.czInvulnerabilityMs,
+            WojakSettings.milestoneFlashOnDuration, WojakSettings.milestoneFlashOffDuration,
+            WojakSettings.milestoneFlashTint);
+    }
+    private showCZHitExplosion() {
+        const origin = MubarakAct3Settings.czHitExplosionOrigin;
+        const x = this.czDirection < 0 ? this.cz.width - origin.x : origin.x;
+        // Use the ordinary invader effect's default display scale, then multiply
+        // it. Adding only to the display list keeps this effect non-physical.
+        const explosion = new Kaboom(this.scene);
+        this.scene.add.existing(explosion);
+        explosion.setPosition(this.cz.x + (x - this.cz.width / 2) * this.cz.scaleX,
+            this.cz.y + (origin.y - this.cz.height / 2) * this.cz.scaleY)
+            .setScale(explosion.scaleX * CZ_HIT_EXPLOSION_SCALE_MULTIPLIER,
+                explosion.scaleY * CZ_HIT_EXPLOSION_SCALE_MULTIPLIER).setDepth(this.sprite.depth + 3);
+        this.czHitExplosions.push(explosion);
+        // Phaser 3.22 emits the sprite-specific completion event here. Keep this
+        // compatibility hook local instead of changing all existing Kaboom users.
+        explosion.once(Phaser.Animations.Events.SPRITE_ANIMATION_COMPLETE, () => explosion.destroy());
+        explosion.once('destroy', () => {
+            const index = this.czHitExplosions.indexOf(explosion);
+            if (index >= 0) this.czHitExplosions.splice(index, 1);
+        });
+        explosion.play(AnimationType.Kaboom);
+        this.scene.sound.play(SoundType.InvaderKilled, { volume: AudioBalance.gains[SoundType.InvaderKilled] });
+    }
+    private launchBNB() {
+        const config = MubarakAct3Settings;
+        if (this.phase !== 'act3' || this.bnbCoins.length >= config.bnbMaxActiveCoins) return;
+        const origin = config.czPumpOrigin;
+        const localX = this.czDirection < 0 ? this.cz.width - origin.x : origin.x;
+        const x = this.cz.x + (localX - this.cz.width / 2) * this.cz.scaleX;
+        const y = this.cz.y + (origin.y - this.cz.height / 2) * this.cz.scaleY;
+        const dx = this.sprite.x - x, dy = this.sprite.y - y, length = Math.hypot(dx, dy) || 1;
+        const sprite = this.scene.add.image(x, y, MubarakBNBAsset.key).setOrigin(0.5).setDepth(12);
+        sprite.setScale(config.bnbCoinSize / sprite.width);
+        this.bnbCoins.push({ sprite, vx: dx / length * config.bnbCoinSpeed, vy: dy / length * config.bnbCoinSpeed });
+    }
+    private removeCoin(coin: { sprite: Phaser.GameObjects.Image }) {
+        const index = this.bnbCoins.findIndex(entry => entry === coin);
+        if (index < 0) return;
+        this.bnbCoins.splice(index, 1);
+        coin.sprite.destroy();
+    }
+    private clearCoins() { this.bnbCoins.slice().forEach(coin => this.removeCoin(coin)); }
+    private updateCoins(delta: number) {
+        const world = this.scene.physics.world.bounds;
+        for (const coin of this.bnbCoins.slice()) {
+            const x = coin.sprite.x, y = coin.sprite.y, half = coin.sprite.displayWidth / 2;
+            coin.sprite.x += coin.vx * delta / 1000;
+            coin.sprite.y += coin.vy * delta / 1000;
+            const body = this.bodyBounds();
+            const contact = segmentRectContact(x, y, coin.sprite.x, coin.sprite.y,
+                { x: body.x - half, y: body.y - half, width: body.width + 2 * half, height: body.height + 2 * half });
+            if (contact !== Infinity) {
+                this.removeCoin(coin);
+                this.act3Pumps++;
+                this.growthFrom = this.sprite.scaleX / this.act3BaseScale;
+                this.growthTo = Math.min(MubarakAct3Settings.maxScaleMultiplier,
+                    1 + this.act3Pumps * MubarakAct3Settings.growthPerPump);
+                this.growthElapsed = 0;
+            } else if (coin.sprite.x + half < world.left || coin.sprite.x - half > world.right ||
+                coin.sprite.y + half < world.top || coin.sprite.y - half > world.bottom) this.removeCoin(coin);
+        }
+    }
+    private updateGrowth(delta: number) {
+        const config = MubarakAct3Settings, world = this.scene.physics.world.bounds;
+        const oldSpan = Math.max(0, world.width - 2 * config.edgeMargin - this.sprite.displayWidth);
+        this.growthElapsed = Math.min(config.growthTweenMs, this.growthElapsed + delta);
+        const t = config.growthTweenMs > 0 ? this.growthElapsed / config.growthTweenMs : 1;
+        this.sprite.setScale(this.act3BaseScale * (this.growthFrom + (this.growthTo - this.growthFrom) * smoothStep(t)));
+        const newSpan = Math.max(0, world.width - 2 * config.edgeMargin - this.sprite.displayWidth);
+        // Preserve progress across the shrinking patrol lane. As the scale eases,
+        // the edges gently carry the boss inward without an abrupt clamp/teleport.
+        if (oldSpan > 0) this.sprite.x = world.centerX + (this.sprite.x - world.centerX) * newSpan / oldSpan;
+        this.sprite.y = this.act3Bottom - this.sprite.displayHeight / 2;
+    }
+    private beginCollapse() {
+        this.clearCoins();
+        this.pumpElapsed = 0;
+        this.cz.destroy();
+        this.cz = undefined;
+        this.phase = 'collapse';
+        this.collapseElapsed = 0;
+        this.collapseScale = this.sprite.scaleX;
+    }
+    private updateCollapse(delta: number) {
+        const duration = MubarakAct3Settings.collapseDurationMs;
+        this.collapseElapsed = Math.min(duration, this.collapseElapsed + delta);
+        const t = duration > 0 ? this.collapseElapsed / duration : 1;
+        // Center origin and fixed position: the dump contracts around the current center.
+        this.sprite.setScale(this.collapseScale * (1 - smoothStep(t)));
+        if (this.collapseElapsed + 1e-7 < duration) return false;
+        this.clear();
+        this.phase = 'complete';
+        return true;
+    }
+    czBounds(): MubarakRect {
+        // Broad phase only; actual hits require opaque artwork in act3Target.
+        return this.cz.getBounds();
+    }
+    private act3ContactTime(body: Phaser.Physics.Arcade.Body, target: MubarakRect) {
+        const previousY = body.prev && body.velocity && body.velocity.y < 0 ? Math.max(body.y, body.prev.y) : body.y;
+        return segmentRectContact(body.x, previousY, body.x, body.y,
+            { x: target.x - body.width, y: target.y - body.height,
+                width: target.width + body.width, height: target.height + body.height });
+    }
+    private act3Target(body: Phaser.Physics.Arcade.Body) {
+        // Resolve the first physical contact, with the shield winning exact ties.
+        let time = mubarakOpaqueContact(this.sprite, body);
+        let target: { kind: 'mubarak' | 'coin' | 'cz'; coin?: BNBCoin } =
+            time !== Infinity ? { kind: 'mubarak' } : undefined;
+        if (this.phase === 'act3') {
+            for (const coin of this.bnbCoins) {
+                const contact = this.act3ContactTime(body, coin.sprite.getBounds());
+                if (contact < time) { time = contact; target = { kind: 'coin', coin }; }
+            }
+        }
+        if (this.cz) {
+            const contact = mubarakOpaqueContact(this.cz, body, MubarakAct3Settings.czAlphaThreshold);
+            if (contact < time) target = { kind: 'cz' };
+        }
+        return target;
     }
     private get cruiseRadius() {
         return Math.max(0, this.scene.physics.world.bounds.width / 2 - this.sprite.displayWidth / 2 - MubarakSettings.edgeMargin);
@@ -447,6 +801,26 @@ export class MubarakEncounter {
         });
     }
     receiveLaser(body: MubarakRect, original: Phaser.GameObjects.Sprite | undefined, playerLineY: number) {
+        if (this.act3Active) {
+            const target = this.act3Target(body as Phaser.Physics.Arcade.Body);
+            if (target && target.kind === 'coin') this.removeCoin(target.coin);
+            if (target && target.kind === 'cz' && this.phase === 'act3' && !this.czInvulnerable) {
+                this.showCZHitExplosion();
+                this.czHits++;
+                this.cz.setTexture(mubarakCZTexture(this.czHits + 1, this.czDirection));
+                this.czFlashElapsed = 0;
+                this.showCZFlash();
+                if (this.czHits === MubarakAct3Settings.successfulHits) {
+                    this.phase = 'escape';
+                    this.clearCoins();
+                    this.act3Diamonds.clear();
+                    this.diamondElapsed = 0;
+                    this.pumpElapsed = 0;
+                    this.czEscapeSpeed = MubarakAct3Settings.escapeInitialSpeed;
+                }
+            }
+            return;
+        }
         if (this.phase !== 'cruise') return;
         if (rectsOverlap(body, this.weakPointBounds())) { this.hit(); return; }
         const incomingBody = original && (original as Phaser.Physics.Arcade.Sprite).body as Phaser.Physics.Arcade.Body;
@@ -501,7 +875,8 @@ export class MubarakEncounter {
         }
     }
     collides(body: Phaser.Physics.Arcade.Body) {
-        if (this.sprite && (this.phase === 'act2' || this.phase === 'defeat')) return rectsOverlap(body, this.bodyBounds());
+        if (this.sprite && this.act3Active) return !!this.act3Target(body);
+        if (this.sprite && (this.phase === 'act2' || this.phase === 'act3Entry')) return rectsOverlap(body, this.bodyBounds());
         return !!this.sprite && this.phase === 'cruise' &&
             (rectsOverlap(body, this.weakPointBounds()) || diamondOverlaps(body, this.diamondPolygon()));
     }
@@ -533,6 +908,19 @@ export class MubarakEncounter {
         return true;
     }
     clear() {
+        this.czHitExplosions.splice(0).forEach(explosion => explosion.destroy());
+        if (this.act3Diamonds) this.act3Diamonds.clear();
+        this.act3Diamonds = undefined;
+        this.diamondElapsed = 0;
+        this.czFlashElapsed = MubarakAct3Settings.czInvulnerabilityMs;
+        this.clearCoins();
+        this.act3Pumps = this.pumpElapsed = this.collapseElapsed = 0;
+        this.act3BaseScale = this.act3Bottom = this.collapseScale = 0;
+        this.growthFrom = this.growthTo = 1;
+        this.growthElapsed = 0;
+        if (this.cz) this.cz.destroy();
+        this.cz = undefined;
+        this.czHits = this.czEscapeSpeed = 0;
         this.act2BarrelsUnlocked = false;
         if (this.shrapnel) this.shrapnel.clear();
         this.shrapnel = undefined;

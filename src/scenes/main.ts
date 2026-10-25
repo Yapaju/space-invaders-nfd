@@ -1,6 +1,6 @@
 import { MubarakDiamondAssets } from '../interface/mubarak-shrapnel';
-import { MubarakBarrelAsset } from '../interface/mubarak-barrels';
-import { MubarakEncounter, MubarakAssets, MubarakExplosionAssets, MubarakSettings, premiumHitDuration, prepareMubarak } from '../interface/mubarak';
+import { MubarakBarrelAsset, MubarakExplosiveBarrelAsset } from '../interface/mubarak-barrels';
+import { MubarakEncounter, MubarakAssets, MubarakBNBAsset, MubarakCZAssets, MubarakExplosionAssets, MubarakSettings, premiumHitDuration, prepareMubarak } from '../interface/mubarak';
 import { AssetType, SoundType } from "../interface/assets";
 import { Bullet, ElectricLaserSettings } from "../interface/bullet";
 import { AssetManager } from "../interface/manager/asset-manager";
@@ -80,8 +80,11 @@ export class MainScene extends Phaser.Scene {
         PopcornAssets.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         this.load.image(AssetType.Banana, "meme-skins/ponke-weapon.png");
         this.load.image(MubarakBarrelAsset.key, MubarakBarrelAsset.path);
+        this.load.image(MubarakExplosiveBarrelAsset.key, MubarakExplosiveBarrelAsset.path);
         MubarakDiamondAssets.forEach(asset => this.load.image(asset.key, asset.path));
         MubarakExplosionAssets.forEach(asset => this.load.image(asset.key, asset.path));
+        MubarakCZAssets.forEach(asset => this.load.image(asset.key, asset.path));
+        this.load.image(MubarakBNBAsset.key, MubarakBNBAsset.path);
         MubarakAssets.forEach(pose => this.load.image(`${pose.key}-source`, pose.path));
         WojakAssets.forEach(pose => this.load.image(pose.asset, pose.path));
         CandleAssets.forEach(candle => this.load.image(candle.asset, candle.path));
@@ -223,7 +226,7 @@ export class MainScene extends Phaser.Scene {
                     return;
                 }
                 if (!this.mubarak.collides(body)) return;
-                // Premium convention: consume every diamond contact, including immunity.
+                // The encounter resolves the first shield, coin, or CZ contact once.
                 this.mubarak.receiveLaser(body, bullet, this.player.y);
                 bullet.disableBody(true, true);
                 this.pendingCleanup.push(() => bullet.destroy());
@@ -382,7 +385,8 @@ export class MainScene extends Phaser.Scene {
     private _damagePlayer(damage = 1) {
         if ((this.state !== GameState.Playing && this.state !== GameState.BossEncounter &&
             this.state !== GameState.MubarakEncounter) || !this.player.active) return;
-        if (this.state === GameState.MubarakEncounter && this.mubarak.phase !== 'act2' && this.mubarak.phase !== 'cruise') return;
+        if (this.state === GameState.MubarakEncounter && this.mubarak.phase !== 'act2' && this.mubarak.phase !== 'cruise' &&
+            this.mubarak.phase !== 'act3') return;
         // One accepted hit removes up to its damage in fixed HUD slots. Keep
         // protection checks above the whole hit and stop at zero remaining lives.
         if (!this.scoreManager.lives.getFirstAlive()) return;

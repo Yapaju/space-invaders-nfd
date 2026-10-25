@@ -168,7 +168,10 @@ p.update(100);near(ric.sprite.x-rx,ric.vx*.1,'ricochet linear x');near(ric.sprit
     for(const roll of [probability-.000001,probability,.9]){
      barrelOwner.random=()=>roll;barrelOwner.spawn();const f=barrelOwner.flights[0];
      check(f.shootable===(roll<probability),'V1.1 weighted probability boundary');
-     check(f.sprite.tintTopLeft===(f.shootable?0x0000ff:0xffffff),'red vs black tint');
+     check(f.sprite.texture.key===(f.shootable?B.MubarakExplosiveBarrelAsset.key:B.MubarakBarrelAsset.key),'yellow explosive vs original black artwork');
+     check(!f.sprite.isTinted&&f.sprite.tintTopLeft===0xffffff,'original artwork colors without tint');
+     near(f.sprite.scaleX,48/1237,'unchanged barrel scale');
+     const bounds=barrelOwner.bounds(f.sprite);near(bounds.width,742*48/1237,'unchanged barrel hitbox width');near(bounds.height,48,'unchanged barrel hitbox height');
      if(!f.shootable){const before=p.act2Health,count=barrelOwner.blasts.length;f.sprite.setPosition(60,400);const r=barrelOwner.bounds(f.sprite),shot=shoot(r.x+r.width/2,r.y+r.height/2);check(shot.active&&f.sprite.active&&p.act2Health===before&&barrelOwner.blasts.length===count,'black barrel laser pass-through');shot.destroy();}
      barrelOwner.removeFlight(f);
     }
@@ -176,13 +179,13 @@ p.update(100);near(ric.sprite.x-rx,ric.vx*.1,'ricochet linear x');near(ric.sprit
     let redCount=0;barrelOwner.flights.slice().forEach(f=>barrelOwner.removeFlight(f));
     for(let i=0;i<1000;i++){barrelOwner.spawn();const f=barrelOwner.flights[0];if(f.shootable)redCount++;barrelOwner.removeFlight(f);}
     check(redCount>80&&redCount<160,'random red distribution around11.96%');
-    const hp=p.act2Health;check(!shoot(p.sprite.x,p.sprite.y).active&&p.act2Health===hp,'direct Act II immunity');
-    const detonate=()=>{p.barrels.spawn();const f=p.barrels.flights[p.barrels.flights.length-1];f.shootable=true;f.sprite.setTint(0xff0000);f.sprite.setPosition(p.sprite.x,p.sprite.y);check(p.tryHitBarrel(p.barrels.bounds(f.sprite)),'shoot Act II barrel');return p.barrels.blasts[p.barrels.blasts.length-1];};
+    const hp=p.act2Health;check(hp===3,'Act II starts with exactly three health');check(!shoot(p.sprite.x,p.sprite.y).active&&p.act2Health===hp,'direct Act II immunity');
+    const detonate=()=>{p.barrels.random=()=>0;p.barrels.spawn();p.barrels.random=rng;const f=p.barrels.flights[p.barrels.flights.length-1];check(f.shootable&&f.sprite.texture.key===B.MubarakExplosiveBarrelAsset.key&&!f.sprite.isTinted,'real untinted yellow barrel');f.sprite.setPosition(p.sprite.x,p.sprite.y);check(p.tryHitBarrel(p.barrels.bounds(f.sprite)),'shoot Act II barrel');return p.barrels.blasts[p.barrels.blasts.length-1];};
     let blast=detonate();check(blast.sprite.anims.currentAnim.key==='ponke-explosion','actual banana animation');near(blast.sprite.scaleX,A.BananaSettings.visualScale,'banana scale');near(blast.radius,81,'small matching radius');
     check(blast.hit&&p.act2Health===hp-1,'nearby barrel hurts boss');p.barrels.step(100);check(p.act2Health===hp-1,'same blast never hits twice');
     p.update(799);check(p.invulnerable,'preserved flash immunity at799');p.update(1);check(!p.invulnerable,'flash duration800');
-    for(let expected=2;expected>=0;expected--){const b=detonate();check(b.hit&&p.act2Health===expected,'accepted next barrel explosion');if(expected>0)p.update(800);}
-    check(p.phase==='defeat'&&p.barrels.flights.length===0,'lethal barrel stops attacks');p.update(799);check(p.phase==='defeat','full lethal flash');p.update(1);check(p.phase==='complete'&&!p.sprite&&!p.barrels,'defeat cleanup');
+    for(let expected=1;expected>=0;expected--){const b=detonate();check(b.hit&&p.act2Health===expected,'accepted next barrel explosion');check(p.phase===(expected>0?'act2':'act3Entry'),'Act III transition begins on exactly the third valid hit');if(expected>0)p.update(800);}
+    check(p.phase==='act3Entry'&&p.barrels.flights.length===0,'lethal barrel stops attacks');p.update(799);check(p.phase==='act3Entry','full lethal flash');p.update(1);check(p.phase==='act3'&&p.sprite&&p.cz&&!p.barrels,'Act III starts with previous hazards cleared');
     // Same real BananaBombs impacts in both acts: distant landing misses, nearby lands hit.
     for(const act of [1,2]){
      p=enter();tip(p);if(act===2){for(let i=0;i<3;i++){p.update(800);p.hit();}p.update(0);p.update(528.75);}

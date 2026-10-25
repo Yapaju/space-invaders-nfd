@@ -19,6 +19,8 @@ export const MubarakShrapnelSettings = {
 
 interface Fragment {
     kind: DiamondKind; sprite: Phaser.GameObjects.Sprite; vx: number; vy: number;
+    linear?: boolean;
+    contactOnly?: boolean;
 }
 interface Effect { sprite: Kaboom; elapsed: number; duration: number; }
 
@@ -90,6 +92,27 @@ export class MubarakShrapnel {
             this.flights.push({ kind, sprite, vx, vy });
         }
     }
+    // Shared black spawn primitive; Act II's mixed burst is unchanged.
+    dropBlack(x: number, y: number) {
+        this.active = true;
+        const sprite = this.scene.add.sprite(x, y, 'mubarak-diamond-black').setOrigin(0.5).setDepth(12);
+        sprite.setScale(MubarakShrapnelSettings.displayWidth / sprite.width);
+        const fragment: Fragment = { kind: 'black', sprite, vx: 0, vy: MubarakShrapnelSettings.fallSpeed };
+        this.flights.push(fragment);
+        this.emitted++;
+        return fragment;
+    }
+    // Opt-in straight trajectories: the shared Act II burst keeps its drag,
+    // settling, and bounces. Each attack draws a fresh direction with replacement.
+    fireBlack(x: number, y: number, anglesDegrees: number[]) {
+        const degrees = anglesDegrees[Math.floor(this.random() * anglesDegrees.length)];
+        const radians = degrees * Math.PI / 180, speed = MubarakShrapnelSettings.fallSpeed;
+        const fragment = this.dropBlack(x, y);
+        fragment.vx = Math.sin(radians) * speed;
+        fragment.vy = Math.cos(radians) * speed;
+        fragment.linear = true;
+        fragment.contactOnly = true;
+    }
     bounds(fragment: Fragment): MubarakRect {
         const width = fragment.sprite.displayWidth * MubarakShrapnelSettings.hitboxRatio;
         const height = fragment.sprite.displayHeight * MubarakShrapnelSettings.hitboxRatio;
@@ -106,18 +129,33 @@ export class MubarakShrapnel {
             this.accumulator = Math.max(0, this.accumulator - step);
             this.elapsed += step;
             for (let i = this.flights.length - 1; i >= 0; i--) {
-                const f = this.flights[i], sprite = f.sprite, oldY = sprite.y;
-                sprite.x += f.vx * (1 - drag) / c.horizontalDrag;
-                f.vx *= drag;
-                sprite.y += c.fallSpeed * seconds + (f.vy - c.fallSpeed) * (1 - settle) / settleRate;
-                f.vy = c.fallSpeed + (f.vy - c.fallSpeed) * settle;
-                const half = sprite.displayWidth / 2;
-                if (sprite.x < world.left + half) { sprite.x = world.left + half; f.vx = Math.abs(f.vx) * 0.5; }
-                if (sprite.x > world.right - half) { sprite.x = world.right - half; f.vx = -Math.abs(f.vx) * 0.5; }
-                if (sprite.y < world.top + half) { sprite.y = world.top + half; f.vy = Math.abs(f.vy) * 0.5; }
-                if (f.kind === 'black' && player && sprite.y >= player.y) {
+                const f = this.flights[i], sprite = f.sprite, oldX = sprite.x, oldY = sprite.y;
+                if (f.linear) {
+                    sprite.x += f.vx * seconds;
+                    sprite.y += f.vy * seconds;
+                    const bounds = sprite.getBounds();
+                    if (bounds.right < world.left || bounds.left > world.right ||
+                        bounds.bottom < world.top || bounds.top > world.bottom) { this.remove(f); continue; }
+                } else {
+                    sprite.x += f.vx * (1 - drag) / c.horizontalDrag;
+                    f.vx *= drag;
+                    sprite.y += c.fallSpeed * seconds + (f.vy - c.fallSpeed) * (1 - settle) / settleRate;
+                    f.vy = c.fallSpeed + (f.vy - c.fallSpeed) * settle;
+                    const half = sprite.displayWidth / 2;
+                    if (sprite.x < world.left + half) { sprite.x = world.left + half; f.vx = Math.abs(f.vx) * 0.5; }
+                    if (sprite.x > world.right - half) { sprite.x = world.right - half; f.vx = -Math.abs(f.vx) * 0.5; }
+                    if (sprite.y < world.top + half) { sprite.y = world.top + half; f.vy = Math.abs(f.vy) * 0.5; }
+                }
+                if (f.contactOnly) {
+                    if (player && player.active && rectsOverlap(this.bounds(f), player.body as Phaser.Physics.Arcade.Body)) {
+                        this.remove(f);
+                        if (this.damagePlayer) this.damagePlayer();
+                        if (!this.active) return; // Last-life damage can clear the encounter.
+                    }
+                } else if (f.kind === 'black' && player && sprite.y >= player.y) {
                     const fraction = Math.max(0, Math.min(1, (player.y - oldY) / (sprite.y - oldY || 1)));
-                    this.impacts.impact(sprite.x, player.y, this.elapsed - step * (1 - fraction));
+                    this.impacts.impact(f.linear ? oldX + (sprite.x - oldX) * fraction : sprite.x,
+                        player.y, this.elapsed - step * (1 - fraction));
                     this.remove(f);
                 } else if (f.kind === 'black' && player && player.active &&
                     rectsOverlap(this.bounds(f), player.body as Phaser.Physics.Arcade.Body)) {

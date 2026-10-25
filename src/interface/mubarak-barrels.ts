@@ -6,15 +6,18 @@ import { BananaBombs, BananaSettings } from './banana-bomb';
 export const MubarakBarrelAsset = {
     key: 'mubarak-barel-black', path: 'weapons/mubarak-barrels/mubarak-barel-black.png'
 };
+export const MubarakExplosiveBarrelAsset = {
+    key: 'mubarak-barel-yellow', path: 'weapons/mubarak-barrels/mubarak-barel-yellow.png'
+};
 export const MubarakBarrelSettings = {
     // Alpha >=128 inspected bounds inside the original 1254-square PNG.
     sourceBody: { x: 256, y: 8, width: 742, height: 1237 },
     bodyHeight: 48, spawnIntervalMs: 450, maxBarrels: 32,
     act1FrequencyMultiplier: 0.3,
-    // Prior rates: 1.8 black/s and 0.2 red/s. V1.1 applies 0.90x / 1.10x:
-    // 1.62 black/s + 0.22 red/s = 1.84/s; red share = 0.22 / 1.84.
+    // Prior rates: 1.8 black/s and 0.2 explosive/s. V1.1 applies 0.90x / 1.10x:
+    // 1.62 black/s + 0.22 explosive/s = 1.84/s; explosive share = 0.22 / 1.84.
     act2FrequencyMultiplier: 0.828,
-    act2ShootableProbability: 11 / 92, shootableTint: 0xff0000,
+    act2ShootableProbability: 11 / 92,
     spawnMargin: 2, spawnAttempts: 8, spawnSeparation: 1.2,
     blastRadius: BananaSettings.hitRadius,
     blastVisualScale: BananaSettings.visualScale
@@ -82,7 +85,7 @@ export class MubarakBarrels {
                 world.top - image.height * scale / 2 - config.spawnMargin, MubarakBarrelAsset.key)
             .setScale(scale).setOrigin(0.5).setDepth(12);
         const shootable = this.explosive && this.random() < config.act2ShootableProbability;
-        if (this.explosive && shootable) sprite.setTint(config.shootableTint);
+        if (shootable) sprite.setTexture(MubarakExplosiveBarrelAsset.key);
         this.flights.push({ sprite, shootable });
     }
     step(delta: number, player?: Phaser.Physics.Arcade.Sprite, damagePlayer?: () => void, frequency = 1) {
