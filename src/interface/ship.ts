@@ -42,7 +42,7 @@ export class Ship {
         }
     }
 
-    static create(scene: Phaser.Scene): Phaser.Physics.Arcade.Sprite {
+    static create(scene: Phaser.Scene, playfieldTop: number): Phaser.Physics.Arcade.Sprite {
         const position = this.startPosition(scene);
         let ship = scene.physics.add.sprite(position.x, position.y, AssetType.Ship);
         applySkin(ship, MemeSkins.Player);
@@ -57,9 +57,13 @@ export class Ship {
         const artRight = artLeft + artWidth;
         const leftInset = (skin.hitbox.x - artLeft) * scale;
         const rightInset = (artRight - skin.hitbox.x - skin.hitbox.width) * scale;
+        // Translate the frame's top and bottom limits to Arcade hitbox limits.
+        const top = playfieldTop + skin.hitbox.y * scale;
+        const bottom = bounds.bottom - this.bottomFrameMargin -
+            (PlayerCanvas.height - skin.hitbox.y - skin.hitbox.height) * scale;
         (ship.body as Phaser.Physics.Arcade.Body).setBoundsRectangle(new Phaser.Geom.Rectangle(
-            bounds.left + leftInset, bounds.top,
-            bounds.width - leftInset - rightInset, bounds.height
+            bounds.left + leftInset, top,
+            bounds.width - leftInset - rightInset, bottom - top
         ));
         ship.setCollideWorldBounds(true);
         return ship;

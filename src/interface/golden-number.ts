@@ -57,6 +57,7 @@ export class GoldenNumber {
     private digits: Phaser.GameObjects.Image[] = [];
     private label: Phaser.GameObjects.Image;
     private visible = true;
+    get isVisible() { return this.visible; }
     text = '';
     width = 0;
     height = 0;

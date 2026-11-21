@@ -26,7 +26,7 @@ export default function copyMemeSkins() {
                 this.addWatchFile(source);
                 fs.readdirSync(source).filter(name => name.endsWith('.png') &&
                     (folder !== 'mini-boss/mubarak' || /^mubarak-(act1-([1-6]-(left|right)|explosion-[1-5])|act2-1-(left|right)|cz-([1-3]-(left|right)|bnb-coin))\.png$/.test(name)) &&
-                    (folder !== 'font' || /^nfd-font-[0-9ENTRFOLXCADIVSK]\.png$/.test(name))).forEach(name => {
+                    (folder !== 'font' || /^nfd-font-[0-9ENTRFOLXCADIVSKPUMHG]\.png$/.test(name))).forEach(name => {
                     const file = path.join(source, name);
                     this.addWatchFile(file);
                     fs.copyFileSync(file, path.join(destination, name));

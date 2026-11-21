@@ -11,8 +11,8 @@ import { AudioBalance } from './audio-balance';
 export const CZ_HIT_EXPLOSION_SCALE_MULTIPLIER = 1.5;
 
 export const MubarakSettings = {
-    // Temporary local playtest: set enabled=false to restore checkpoint-only rotation.
-    testSpawn: { enabled: true, afterWave: 1 },
+    // Optional early encounter for local playtests and boss fixtures.
+    testSpawn: { enabled: false, afterWave: 1 },
     canvasWidth: 1664, canvasHeight: 1216, displayWidth: 360,
     entranceMs: 3600, patrolY: 190, edgeMargin: 24, cruisePeriodMs: 14000,
     waveAmplitude: 14, wavePeriodMs: 7000, bobAmplitude: 3, bobPeriodMs: 2200,

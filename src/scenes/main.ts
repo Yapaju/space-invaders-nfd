@@ -17,7 +17,7 @@ import { PepePoses, PonkePoses, PopcatPoses, prepareEnemySkins } from "../interf
 import { EnemyType } from "../interface/enemy-type";
 import { BananaBombs } from "../interface/banana-bomb";
 import { DamageFeedback } from "../interface/damage-feedback";
-import { GoldenUiAssets } from "../interface/golden-number";
+import { GoldenUiAssets, UiDepth } from "../interface/golden-number";
 import { ElonAlly } from "../interface/elon-ally";
 import { RapidFire, RapidFireSettings } from "../interface/rapid-fire";
 import { WojakBoss, WojakAssets, WojakSettings, shouldStartWojakTest } from "../interface/wojak-boss";
@@ -32,7 +32,7 @@ import { PremiumProgress } from '../interface/premium-spawn';
 import { premiumInvaderOf } from '../interface/premium-invader';
 import { FinalRunStats } from '../interface/flex-card-renderer';
 import { FlexCardPreview } from '../interface/flex-card-preview';
-import { FlexCardLetters } from '../interface/flex-card-instruction';
+import { NfdLetters, pauseInstructionTexture } from '../interface/flex-card-instruction';
 
 export class MainScene extends Phaser.Scene {
     state: GameState;
@@ -45,6 +45,10 @@ export class MainScene extends Phaser.Scene {
     invadersKilled = 0;
     private finalRunStats: FinalRunStats;
     private flexCardPreview = new FlexCardPreview(() => this.input.keyboard.resetKeys());
+    private pauseMessage: Phaser.GameObjects.Image;
+    private pausedAt: number | undefined;
+    private pausedDuration = 0;
+    private restoreWaveAnnouncement = false;
     private nextWaveReadyAt = 0;
     private pendingCleanup: Array<() => void> = [];
     private bananaBombs: BananaBombs;
@@ -61,6 +65,8 @@ export class MainScene extends Phaser.Scene {
     player: Phaser.Physics.Arcade.Sprite;
     alienManager: AlienManager;
     cursors: Phaser.Types.Input.Keyboard.CursorKeys;
+    private wasd: { left: Phaser.Input.Keyboard.Key; right: Phaser.Input.Keyboard.Key;
+        up: Phaser.Input.Keyboard.Key; down: Phaser.Input.Keyboard.Key };
     fireKey: Phaser.Input.Keyboard.Key;
 
     constructor() {
@@ -96,7 +102,7 @@ export class MainScene extends Phaser.Scene {
         this.load.image(AssetType.ElonEscapeRight, "meme-skins/elon-ally-escape-right.png");
         this.load.image(AssetType.ElonEscapeLeft, "meme-skins/elon-ally-escape-left.png");
         GoldenUiAssets.forEach(asset => this.load.image(asset.key, asset.path));
-        FlexCardLetters.forEach(asset => this.load.image(asset.key, asset.path));
+        NfdLetters.forEach(asset => this.load.image(asset.key, asset.path));
         PlayerPoses.forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         PepePoses.concat(PonkePoses, PopcatPoses).forEach(pose => this.load.image(`${pose.asset}-source`, pose.path));
         this.load.spritesheet(AssetType.Kaboom, "images/explode.png", {
@@ -130,13 +136,24 @@ export class MainScene extends Phaser.Scene {
         this.assetManager = new AssetManager(this);
         this.animationFactory = new AnimationFactory(this);
         this.cursors = this.input.keyboard.createCursorKeys();
+        const keys = Phaser.Input.Keyboard.KeyCodes;
+        this.wasd = {
+            left: this.input.keyboard.addKey(keys.A), right: this.input.keyboard.addKey(keys.D),
+            up: this.input.keyboard.addKey(keys.W), down: this.input.keyboard.addKey(keys.S)
+        };
         this.fireKey = this.input.keyboard.addKey(
             Phaser.Input.Keyboard.KeyCodes.SPACE
         );
-        this.player = Ship.create(this);
+        this.player = Ship.create(this, ScoreManager.playfieldTop);
         this.waveSeed = waveSeedFromSearch(typeof location === 'undefined' ? '' : location.search);
         this.alienManager = new AlienManager(this, this.waveSeed, this.premiumProgress);
         this.scoreManager = new ScoreManager(this);
+        const { width, height } = this.scale.gameSize;
+        this.pauseMessage = this.add.image(width / 2, height / 2, pauseInstructionTexture(this))
+            .setDepth(UiDepth.Overlay).setVisible(false);
+        this.pauseMessage.setScale(Math.min(28 / this.pauseMessage.height, (width - 40) / this.pauseMessage.width));
+        this.pausedAt = undefined;
+        this.pausedDuration = 0;
         this.rapidFire = new RapidFire(this, (previous, current) => {
             // Recalculate the pending shot from its original fire time so a
             // rate change takes effect immediately, without stacking refreshes.
@@ -153,6 +170,9 @@ export class MainScene extends Phaser.Scene {
         this.events.on('resume', this._syncPlayerPose, this);
         this.events.once('shutdown', () => {
             this.flexCardPreview.close();
+            window.removeEventListener('keydown', this._handlePauseKey);
+            window.removeEventListener('keyup', this._releasePausedKey);
+            if (this.pausedAt !== undefined) this.sound.stopAll();
             this.input.keyboard.off('keydown-ENTER', this._openFlexCard, this);
             this.input.keyboard.off('keydown-F6', this._previewMubarakFinal, this);
             if (typeof __NFD_DEV__ !== 'undefined' && __NFD_DEV__) {
@@ -175,6 +195,9 @@ export class MainScene extends Phaser.Scene {
             this.pendingCleanup = [];
         });
 
+        // A paused Phaser scene cannot receive its keyboard plugin's events.
+        window.addEventListener('keydown', this._handlePauseKey);
+        window.addEventListener('keyup', this._releasePausedKey);
         this.input.keyboard.on('keydown-ENTER', this._openFlexCard, this);
         if (typeof __NFD_DEV__ !== 'undefined' && __NFD_DEV__) {
             this.input.keyboard.addCapture(Phaser.Input.Keyboard.KeyCodes.F6);
@@ -194,6 +217,9 @@ export class MainScene extends Phaser.Scene {
     }
 
     update(time?: number, delta = 0) {
+        // Phaser's Clock advances TimerEvents by delta, but its now value is
+        // the raw frame timestamp. Keep gameplay deadlines on active time.
+        if (this.pausedDuration && time !== undefined) this.time.now = time - this.pausedDuration;
         this.starfield.tilePositionY -= 1;
         if (this.state === GameState.GameOver) {
             this.player.setVelocity(0, 0);
@@ -316,13 +342,12 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _shipKeyboardHandler() {
-        let playerBody = this.player.body as Phaser.Physics.Arcade.Body;
-        playerBody.setVelocity(0, 0);
-        if (this.cursors.left.isDown) {
-            playerBody.setVelocityX(-200);
-        } else if (this.cursors.right.isDown) {
-            playerBody.setVelocityX(200);
-        }
+        const x = this._horizontalInput();
+        const up = this.cursors.up.isDown || this.wasd.up.isDown;
+        const down = this.cursors.down.isDown || this.wasd.down.isDown;
+        const y = Number(down) - Number(up);
+        const speed = x && y ? 200 * Math.SQRT1_2 : 200;
+        (this.player.body as Phaser.Physics.Arcade.Body).setVelocity(x * speed, y * speed);
         this._syncPlayerPose();
 
         if (this.fireKey.isDown) {
@@ -331,8 +356,15 @@ export class MainScene extends Phaser.Scene {
     }
 
     private _syncPlayerPose() {
-        const direction = this.cursors.left.isDown ? -1 : this.cursors.right.isDown ? 1 : 0;
-        Ship.setDirection(this.player, direction, this.time.now, this.fireKey.isDown && this.playerShootingEnabled);
+        if (this.pauseMessage && this.pauseMessage.visible) return;
+        Ship.setDirection(this.player, this._horizontalInput(), this.time.now,
+            this.fireKey.isDown && this.playerShootingEnabled);
+    }
+
+    private _horizontalInput() {
+        const left = this.cursors.left.isDown || this.wasd.left.isDown;
+        const right = this.cursors.right.isDown || this.wasd.right.isDown;
+        return Number(right) - Number(left);
     }
 
     private _bulletHitAliens(bullet: Bullet, alien: Alien) {
@@ -430,6 +462,34 @@ export class MainScene extends Phaser.Scene {
         if (this.bananaBombs) this.bananaBombs.clear();
         if (this.elonAlly) this.elonAlly.clear();
     }
+
+    private _handlePauseKey = (event: KeyboardEvent) => {
+        if (event.key !== 'Enter' || event.repeat || event.defaultPrevented ||
+            this.state === GameState.GameOver) return;
+        if (this.pausedAt !== undefined) {
+            event.preventDefault();
+            this.pausedDuration += performance.now() - this.pausedAt;
+            this.pausedAt = undefined;
+            this.sys.resume();
+            this.pauseMessage.setVisible(false);
+            this.scoreManager.waveAnnouncement.setVisible(this.restoreWaveAnnouncement);
+            this.sound.resumeAll();
+        } else if (this.sys.isActive()) {
+            event.preventDefault();
+            this.pausedAt = performance.now();
+            this.restoreWaveAnnouncement = this.scoreManager.waveAnnouncement.isVisible;
+            this.scoreManager.waveAnnouncement.setVisible(false);
+            this.pauseMessage.setVisible(true);
+            this.sys.pause();
+            this.sound.pauseAll();
+        }
+    };
+
+    private _releasePausedKey = (event: KeyboardEvent) => {
+        if (this.pausedAt === undefined) return;
+        const key = this.input.keyboard.keys[event.keyCode];
+        if (key) key.reset();
+    };
 
     private _openFlexCard(event: KeyboardEvent) {
         if (event.repeat || this.state !== GameState.GameOver || !this.finalRunStats || this.flexCardPreview.isOpen) return;

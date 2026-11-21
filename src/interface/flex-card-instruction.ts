@@ -1,5 +1,6 @@
 const message = 'ENTER FOR FLEX CARD';
-export const FlexCardLetters = Array.from(new Set(message.replace(/ /g, '').split('')))
+const pauseMessage = 'PRESS ENTER TO RESUME THE GAME';
+export const NfdLetters = Array.from(new Set((message + pauseMessage).replace(/ /g, '').split('')))
     .map(letter => ({ key: `nfd-flex-letter-${letter}`, path: `font/nfd-font-${letter}.png` }));
 
 // Shared image-row compositor for NFD lettering. Null represents the existing
@@ -32,11 +33,25 @@ export function nfdInkBounds(canvas: HTMLCanvasElement) {
 
 // Compose the exact existing golden glyph artwork, including its highlights/shadows.
 export function flexCardInstructionTexture(scene: Phaser.Scene): string {
-    const key = 'nfd-flex-card-instruction-v1';
+    return letteringTexture(scene, 'nfd-flex-card-instruction-v1', message);
+}
+
+export function pauseInstructionTexture(scene: Phaser.Scene): string {
+    return letteringTexture(scene, 'nfd-pause-instruction', pauseMessage, true);
+}
+
+function letteringTexture(scene: Phaser.Scene, key: string, text: string, period = false): string {
     if (scene.textures.exists(key)) return key;
-    const glyphs = message.split('').map(letter => letter === ' ' ? null :
+    const glyphs = (period ? text + ' ' : text).split('').map(letter => letter === ' ' ? null :
         scene.textures.get(`nfd-flex-letter-${letter}`).getSourceImage() as HTMLImageElement);
     const canvas = composeNfdLettering(glyphs, 100);
+    // The existing NFD artwork has letters and digits. Draw its missing period
+    // at the lettering baseline using the same gold palette.
+    if (period) {
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#e6b852';
+        context.fillRect(canvas.width - 28, 82, 16, 16);
+    }
     scene.textures.addCanvas(key, canvas);
     return key;
 }

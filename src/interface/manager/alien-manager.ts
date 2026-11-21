@@ -85,6 +85,11 @@ export class AlienManager {
             if (!aliens.length) this.entranceRemaining = 0;
             return false;
         }
+        const reachedPlayer = () => aliens.some(alien => (alien.body as Phaser.Physics.Arcade.Body).bottom >= defensiveLine);
+        if (reachedPlayer()) {
+            this.stopMovement();
+            return true;
+        }
         if (this.isEntering) {
             const distance = Math.min(this.entranceRemaining,
                 WaveDirectorConfig.formation.entrance.speed * Math.max(0, delta) / 1000);
@@ -92,10 +97,7 @@ export class AlienManager {
             this._move(aliens, 0, distance);
             // Normal movement/timed descent starts on the next update. Never
             // spend entrance time on a row bounce or a descent clock.
-            return false;
-        }
-        const reachedPlayer = () => aliens.some(alien => (alien.body as Phaser.Physics.Arcade.Body).bottom >= defensiveLine);
-        if (reachedPlayer()) {
+            if (!reachedPlayer()) return false;
             this.stopMovement();
             return true;
         }

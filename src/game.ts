@@ -20,6 +20,11 @@ const config: Phaser.Types.Core.GameConfig = {
     parent: "SpaceInvaders"
 };
 
+// Allow a browser with WebGL rendering problems to use the Canvas renderer.
+if (new URLSearchParams(window.location.search).get('renderer') === 'canvas') {
+    config.type = Phaser.CANVAS;
+}
+
 class SpaceInvadersGame extends Phaser.Game {
     constructor(config: Phaser.Types.Core.GameConfig) {
         super(config)

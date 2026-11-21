@@ -62,15 +62,17 @@ export default {
 
         //  See https://www.npmjs.com/package/rollup-plugin-serve for config options
         serve({
-            open: true,
+            // The serve plugin opens the page before Rollup writes game.js.
+            open: false,
             contentBase: 'dist',
             host: 'localhost',
-            port: 4201,
+            port: process.env.NFD_DEV_PORT ? Number(process.env.NFD_DEV_PORT) : 4201,
             headers: {
                 'Access-Control-Allow-Origin': '*'
             }
         }),
-        livereload("dist")
+        // A one-time dev build does not need a second server for live reload.
+        process.env.ROLLUP_WATCH && livereload("dist")
 
     ]
 };

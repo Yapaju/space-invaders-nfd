@@ -2,10 +2,15 @@ import { AssetType } from "../assets";
 import { applySkinAppearance, MemeSkins } from "../skins";
 import { GoldenNumber, UiDepth, UiTexture } from "../golden-number";
 import { flexCardInstructionTexture } from '../flex-card-instruction';
+import { BuffIndicatorSettings } from '../buff-indicator';
 
 export const MAX_LIVES = 3;
 
 export class ScoreManager {
+  // Reserve space for the lowest HUD element even when its buff is inactive.
+  static readonly playfieldTop = Math.ceil(
+    BuffIndicatorSettings.y + BuffIndicatorSettings.radius + BuffIndicatorSettings.stroke / 2
+  ) + 4;
   scoreText: GoldenNumber;
   waveText: GoldenNumber;
   waveAnnouncement: GoldenNumber;

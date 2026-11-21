@@ -370,7 +370,7 @@ const playerScene = { physics: { world: playerWorld, add: { sprite(x, y, key) {
     sprite.body = new ArcadeBody(playerWorld, sprite);
     return sprite;
 } } } };
-const enlargedPlayer = Ship.create(playerScene);
+const enlargedPlayer = Ship.create(playerScene, ScoreManager.playfieldTop);
 const spawn = Ship.startPosition(playerScene);
 nearSkin(enlargedPlayer.width * enlargedPlayer.scaleX, 52 * 1.4);
 nearSkin(enlargedPlayer.height * enlargedPlayer.scaleY, 320 * 52 * 1.4 / 335);
@@ -426,6 +426,13 @@ for (const outsideX of [-100, 900]) {
         assert(art.left >= -1e-7 && art.right <= 800 + 1e-7, 'every DOGE pose remains fully visible at both canvas edges');
     }
 }
+for (const [outsideY, edge, expected] of [[0, 'top', 94], [700, 'bottom', 588]]) {
+    enlargedPlayer.body.reset(spawn.x, outsideY);
+    enlargedPlayer.body.preUpdate(false, 0);
+    enlargedPlayer.body.checkWorldBounds();
+    enlargedPlayer.body.postUpdate();
+    nearSkin(enlargedPlayer.getBounds()[edge], expected);
+}
 enlargedPlayer.body.reset(spawn.x, spawn.y);
 enlargedPlayer.body.preUpdate(false, 0);
 const enlargedState = [enlargedPlayer.scaleX, enlargedPlayer.scaleY, enlargedPlayer.body.width, enlargedPlayer.body.height];
@@ -457,10 +464,12 @@ for (const [direction, key, now] of [
     Ship.setDirection(directionalPlayer, direction, now);
     assert.equal(directionalPlayer.textureChanges, switches, 'do not reapply unchanged textures every frame');
 }
-// Exercise the actual input handler, including left-key precedence and shooting origin.
+// Exercise the actual input handler, including opposite keys and shooting origin.
 const inputScene = new MainScene();
 inputScene.player = directionalPlayer;
-inputScene.cursors = { left: { isDown: false }, right: { isDown: false } };
+const movementKeys = () => Object.fromEntries(['left', 'right', 'up', 'down'].map(key => [key, { isDown: false }]));
+inputScene.cursors = movementKeys();
+inputScene.wasd = movementKeys();
 inputScene.fireKey = { isDown: true };
 inputScene.state = GameState.Playing;
 inputScene.time = { now: 1000 };
@@ -468,7 +477,7 @@ let shotOrigin;
 inputScene.assetManager = { bullets: { get: () => ({ shoot(x, y) { shotOrigin = [x, y]; } }) } };
 for (const [left, right, key, velocity] of [
     [true, false, 'ship-left-shooting', -200], [false, true, 'ship-right-shooting', 200],
-    [false, false, 'ship-shooting', 0], [true, true, 'ship-left-shooting', -200]
+    [false, false, 'ship-shooting', 0], [true, true, 'ship-shooting', 0]
 ]) {
     inputScene.cursors.left.isDown = left; inputScene.cursors.right.isDown = right;
     inputScene.time.now += 201;
@@ -479,6 +488,28 @@ for (const [left, right, key, velocity] of [
     assert.equal(directionalPlayer.x, 400); assert.equal(directionalPlayer.y, 500);
 }
 
+for (const keys of [inputScene.cursors, inputScene.wasd]) {
+    inputScene.cursors.left.isDown = inputScene.cursors.right.isDown = false;
+    for (const [key, x, y] of [['left', -200, 0], ['right', 200, 0], ['up', 0, -200], ['down', 0, 200]]) {
+        keys[key].isDown = true;
+        inputScene.time.now += 201;
+        shotOrigin = undefined;
+        inputScene._shipKeyboardHandler();
+        nearSkin(directionalPlayer.body.velocity.x, x);
+        nearSkin(directionalPlayer.body.velocity.y, y);
+        assert.deepEqual(shotOrigin, [400, 500 - Ship.bulletOffset]);
+        keys[key].isDown = false;
+    }
+}
+inputScene.cursors.up.isDown = inputScene.wasd.right.isDown = true;
+inputScene._shipKeyboardHandler();
+nearSkin(directionalPlayer.body.velocity.x, 200 * Math.SQRT1_2);
+nearSkin(directionalPlayer.body.velocity.y, -200 * Math.SQRT1_2);
+inputScene.wasd.down.isDown = true;
+inputScene._shipKeyboardHandler();
+nearSkin(directionalPlayer.body.velocity.x, 200);
+nearSkin(directionalPlayer.body.velocity.y, 0);
+inputScene.cursors.up.isDown = inputScene.wasd.right.isDown = inputScene.wasd.down.isDown = false;
 // Consecutive resolved movement, not key-press history, controls reversal poses.
 inputScene.fireKey.isDown = false;
 function drive(now, left, right, key) {
@@ -486,7 +517,7 @@ function drive(now, left, right, key) {
     inputScene.cursors.left.isDown = left; inputScene.cursors.right.isDown = right;
     inputScene._shipKeyboardHandler();
     assert.equal(directionalPlayer.texture.key, key);
-    assert.equal(directionalPlayer.body.velocity.x, left ? -200 : right ? 200 : 0);
+    assert.equal(directionalPlayer.body.velocity.x, 200 * (Number(right) - Number(left)));
     assert.equal(directionalPlayer.x, 400); assert.equal(directionalPlayer.y, 500);
     assert.deepEqual(shotOrigin, [400, 500 - Ship.bulletOffset]);
 }
@@ -571,8 +602,8 @@ inputScene.state=GameState.Playing;
 shootDrive(3640,false,true,true,'ship-right-shooting',2);
 inputScene.wojak=undefined;
 inputScene.fireKey.isDown = false;
-drive(2720, true, true, 'ship-turn-left');   // Existing left-key precedence is preserved.
-drive(2740, true, false, 'ship-turn-left');  // Releasing right does not restart this turn.
+drive(2720, true, true, 'ship');             // Opposite keys cancel and interrupt the turn.
+drive(2740, true, false, 'ship-left');       // Releasing right starts left from idle.
 drive(2753, true, false, 'ship-left');
 drive(2850, false, false, 'ship');
 
@@ -704,7 +735,9 @@ assert.equal(spawnCount, 0);
 scene.player.body = scene.player;
 scene.player.x = 400;
 scene.player.y = 500;
-scene.cursors = { left: { isDown: true }, right: { isDown: false } };
+scene.cursors = movementKeys();
+scene.cursors.left.isDown = true;
+scene.wasd = movementKeys();
 scene.fireKey = { isDown: true };
 scene._shipKeyboardHandler = MainScene.prototype._shipKeyboardHandler;
 const combatOverlap = scene.physics.overlap;

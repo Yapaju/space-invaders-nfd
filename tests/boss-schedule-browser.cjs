@@ -65,17 +65,138 @@ async function serve(route) {
   for(const renderer of ['canvas','webgl']){
    await page.goto('http://mubarak.test/?'+renderer);
    await page.waitForFunction(()=>window.testGame&&testGame.scene.scenes[0]&&testGame.scene.scenes[0].alienManager);
+   await page.evaluate(() => {
+    window.movementEvents = [];
+    window.addEventListener('keydown', event => movementEvents.push([event.code, event.defaultPrevented]));
+   });
+   for (const [keys, x, y] of [
+    [['w'], 0, -200], [['a'], -200, 0], [['s'], 0, 200], [['d'], 200, 0],
+    [['ArrowUp'], 0, -200], [['ArrowLeft'], -200, 0],
+    [['ArrowDown'], 0, 200], [['ArrowRight'], 200, 0],
+    [['w', 'ArrowUp', 'd', 'ArrowRight'], 200 * Math.SQRT1_2, -200 * Math.SQRT1_2],
+    [['a', 'ArrowRight', 'w'], 0, -200],
+    [['w', 'ArrowDown', 'd'], 200, 0],
+    [['a', 'd', 'ArrowLeft', 'ArrowRight', 'w', 's'], 0, 0]
+   ]) {
+    for (const key of keys) await page.keyboard.down(key);
+    await page.waitForFunction(([x, y]) => {
+     const scene = testGame.scene.scenes[0];
+     const velocity = scene.player.body.velocity;
+     return Math.abs(velocity.x - x) < .01 && Math.abs(velocity.y - y) < .01;
+    }, [x, y]);
+    for (const key of keys) await page.keyboard.up(key);
+   }
+   const movementEvents = await page.evaluate(() => window.movementEvents);
+   assert(movementEvents.length > 0 && movementEvents.every(([, captured]) => captured),
+    'Phaser prevents browser defaults for movement keys');
+   await page.evaluate(() => testGame.scene.scenes[0].restart());
+   await page.evaluate(() => {
+    const s = testGame.scene.scenes[0];
+    s.firingTimer = s.time.now + 4000;
+    s.rapidFire.activate();
+    const bullet = s.assetManager.enemyBullets.get();
+    bullet.enableBody(true, 40, 300, true, true);
+    bullet.setVelocityY(30);
+    window.pauseSnapshot = () => ({
+     time: s.time.now, wave: s.wave, state: s.state, firingDeadline: s.firingTimer,
+     shotDeadline: s.bulletTime, buffElapsed: s.rapidFire.timer.getElapsed(),
+     starfieldY: s.starfield.tilePositionY, player: [s.player.x, s.player.y, s.player.texture.key],
+     enemyShotY: bullet.y, playerShots: s.assetManager.bullets.getChildren()
+      .filter(b => b.active).map(b => [b.y, b.frame.name]),
+     invaderY: s.alienManager.aliens.getChildren()[0].y
+    });
+   });
+   await page.keyboard.down('a');
+   await page.keyboard.down('Space');
+   await page.waitForFunction(() => testGame.scene.scenes[0].assetManager.bullets.countActive(true) > 0);
+   await page.keyboard.down('Enter');
+   const paused = await page.evaluate(() => {
+    const s = testGame.scene.scenes[0];
+    if (!s.sys.isPaused() || !s.pauseMessage.visible || s.pauseMessage.x !== 400 || s.pauseMessage.y !== 300 ||
+        s.pauseMessage.texture.key !== 'nfd-pause-instruction') throw Error('centered NFD pause message');
+    return pauseSnapshot();
+   });
+   await page.keyboard.up('a');
+   await page.keyboard.press('ArrowRight');
+   await page.keyboard.up('Space');
+   await page.keyboard.down('Enter'); // A held Enter generates a repeat keydown.
+   await page.waitForTimeout(650);
+   assert.deepEqual(await page.evaluate(() => pauseSnapshot()), paused);
+   await page.keyboard.up('Enter');
+   await page.keyboard.press('Enter');
+   await page.waitForFunction(y => pauseSnapshot().enemyShotY > y, paused.enemyShotY);
+   const resumed = await page.evaluate(() => {
+    const s = testGame.scene.scenes[0];
+    if (s.sys.isPaused() || s.pauseMessage.visible || s.wasd.left.isDown || s.cursors.right.isDown || s.fireKey.isDown) {
+     throw Error('resume clears the overlay and honors key releases during pause');
+    }
+    return pauseSnapshot();
+   });
+   assert(resumed.time - paused.time < 500, 'pause duration must not advance absolute gameplay timers');
+   assert.equal(resumed.firingDeadline, paused.firingDeadline, 'regular firing deadline survives pause');
+   assert(resumed.buffElapsed > paused.buffElapsed && resumed.buffElapsed - paused.buffElapsed < 500,
+    'Phaser timer resumes without catching up');
+   await page.evaluate(() => testGame.scene.scenes[0].restart());
+   const startY = await page.evaluate(() => testGame.scene.scenes[0].player.y);
+   await page.keyboard.down('w');
+   await page.keyboard.down('Space');
+   await page.waitForFunction(y => {
+    const scene = testGame.scene.scenes[0];
+    return scene.player.y < y - 10 && scene.assetManager.bullets.countActive(true) > 0;
+   }, startY);
+   await page.keyboard.up('Space');
+   await page.keyboard.up('w');
+   await page.keyboard.down('ArrowDown');
+   await page.waitForFunction(y => Math.abs(testGame.scene.scenes[0].player.y - y) < 1, startY);
+   await page.keyboard.up('ArrowDown');
+   // Isolate the upper bound so the invasion check cannot end this movement trial.
+   await page.evaluate(() => testGame.scene.scenes[0].alienManager.stopMovement());
+   await page.keyboard.down('ArrowUp');
+   await page.waitForFunction(() => Math.abs(testGame.scene.scenes[0].player.getBounds().top - 94) < .01);
+   await page.keyboard.up('ArrowUp');
+   await page.evaluate(() => {
+    const s = testGame.scene.scenes[0];
+    const livesBottom = Math.max(...s.scoreManager.lives.getChildren().map(life => life.getBounds().bottom));
+    if (s.player.getBounds().top <= livesBottom) throw Error('player overlaps HUD');
+    s.assetManager.bullets.clear(true, true);
+   });
+   await page.keyboard.down('Space');
+   await page.waitForFunction(() => testGame.scene.scenes[0].assetManager.bullets.countActive(true) > 0);
+   await page.keyboard.up('Space');
+   await page.evaluate(() => testGame.scene.scenes[0].restart());
    await page.addScriptTag({content:fs.readFileSync(path.join(__dirname,'helpers/active-wave-fixture.js'),'utf8')});
    reports.push(await page.evaluate(renderer=>{
     testGame.loop.stop();installActiveWaveFixture(testGame.scene.scenes[0]);const s=testGame.scene.scenes[0],D=load('src/interface/wave-director'),M=load('src/interface/mubarak'),W=load('src/interface/wojak-boss'),A=load('src/interface/assets').AssetType;
     const check=(v,l)=>{if(!v)throw Error(l);};
-    check(M.MubarakSettings.testSpawn.enabled&&M.MubarakSettings.testSpawn.afterWave===1,'temporary Wave 1 Mubarak override enabled');
+    check(!M.MubarakSettings.testSpawn.enabled,'early Mubarak override disabled by default');
     check(s.wave===1&&s.state==='playing'&&!s.mubarak,'Wave 1 starts normally');
     for(let wave=1;wave<=10000;wave++)check(D.bossForWave(wave)===(wave%10?undefined:wave%20?'wojak':'mubarak'),'unbounded parity schedule '+wave);
     check(D.bossForWave(0)===undefined,'no wave0 boss');
     const checkpoint=wave=>{s.wave=wave;s.alienManager.aliens.clear(true,true);s.assetManager.bullets.clear(true,true);s.state='waveTransition';s.nextWaveReadyAt=s.time.now;s._startNextWave();};
     const shoot=(x,y)=>{const b=s.assetManager.bullets.get();b.enableBody(true,x,y,true,true);b.shoot(x,y);b.body.preUpdate(false,0);s.update(undefined,0);return b;};
-    M.MubarakSettings.testSpawn.enabled=false; // Single-flag restoration of production rotation.
+    const enter = (repeat = false) => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', repeat }));
+    for (const name of D.WaveDirectorConfig.formation.choices) {
+     s.restart();
+     let seed = 0;
+     while(D.formationFromRoll(D.randomForWave(seed ^ 0x464f524d, 1)()) !== name) seed++;
+     s.alienManager.reset(1, seed);
+     const alien = s.alienManager.aliens.getChildren()[0];
+     const body = s.player.body;
+     body.reset(400, 160);
+     body.preUpdate(false, 0);
+     const invaderBody = alien.body;
+     invaderBody.reset(alien.x, body.top - (invaderBody.bottom - alien.y) + .001);
+     invaderBody.preUpdate(false, 0);
+     s.update(undefined, 0);
+     check(s.state === 'gameOver' && s.scoreManager.lives.countActive(true) === 3,
+      'instant invasion loss at the raised player line for ' + name);
+     s.cursors.right.isDown = s.wasd.up.isDown = true;
+     s.update(undefined, 16);
+     check(body.velocity.x === 0 && body.velocity.y === 0, 'movement input is ignored at Game Over');
+     s.cursors.right.isDown = s.wasd.up.isDown = false;
+     enter();
+     check(!s.sys.isPaused() && !s.pauseMessage.visible, 'pause does not intercept Game Over');
+    }
     for(const wave of [1,2,9,11,19,21,29,31,39,41,49,51,59,61]){
      s.restart();checkpoint(wave);check(s.state==='playing'&&s.wave===wave+1&&(!s.wojak||!s.wojak.sprite)&&(!s.mubarak||!s.mubarak.sprite),'ordinary wave no boss '+wave);
     }
@@ -88,18 +209,20 @@ async function serve(route) {
     s._startNextWave();check(s.state==='waveTransition'&&!s.wojak,'1500ms delay retained');
     s.nextWaveReadyAt=s.time.now;const trailing=s.assetManager.bullets.get();trailing.enableBody(true,20,400,true,true);s._startNextWave();check(s.state==='waveTransition','trailing player bullet gate retained');trailing.destroy();
     const sequence=[];
-    M.MubarakSettings.testSpawn.enabled=true;
-    for(const wave of [1,10,20,30,40,50,60]){
-     if(wave===1){
-      s.restart();
+    for(const wave of [10,20,30,40,50,60]){
+     if(wave===20){
+      s.wave=20;s.alienManager.reset(20);
       for(const alien of s.alienManager.aliens.getChildren().slice()){
        const b=s.assetManager.bullets.get();b.enableBody(true,alien.x,alien.y,true,true);s._bulletHitAliens(b,alien);drain();
       }
-      check(s.state==='waveTransition'&&s.wave===1&&s.invadersKilled===24,'real Wave 1 completion');
-      s._startNextWave();check(s.state==='waveTransition'&&(!s.mubarak||!s.mubarak.sprite),'early override retains transition delay');
+      check(s.state==='waveTransition'&&s.wave===20,'real Wave 20 completion');
+      enter();testGame.scene.update(performance.now(), 5000);
+      check(s.sys.isPaused() && s.state==='waveTransition' && s.wave===20,'pause freezes pending transition');
+      enter();
+      s._startNextWave();check(s.state==='waveTransition'&&(!s.mubarak||!s.mubarak.sprite),'Wave 20 retains transition delay');
       s.nextWaveReadyAt=s.time.now;s.assetManager.bullets.clear(true,true);s._startNextWave();
      }else checkpoint(wave);
-     const kind=wave===1?'mubarak':D.bossForWave(wave),expected=kind==='wojak'?'bossEncounter':'mubarakEncounter';
+     const kind=D.bossForWave(wave),expected=kind==='wojak'?'bossEncounter':'mubarakEncounter';
      check(s.state===expected&&s.wave===wave,'correct encounter '+wave);
      const boss=kind==='wojak'?s.wojak:s.mubarak,root=boss.sprite;
      s._startNextWave();if(kind==='wojak')s._startWojak();else s._startMubarak();
@@ -114,6 +237,17 @@ async function serve(route) {
       s.update(undefined,7299);check(s.state===expected,'full Wojak cinematic remains pending');s.update(undefined,1);
      }else{
       check(root.texture.key.indexOf('mubarak-act1-1-')===0,'real Mubarak entrance art');
+      if (wave===20) {
+       const initial = [root.x, root.y, boss.entranceElapsed, s.time.now];
+       enter();testGame.scene.update(performance.now(), 1000);enter(true);
+       check(s.sys.isPaused() && s.pauseMessage.visible &&
+        JSON.stringify(initial)===JSON.stringify([root.x, root.y, boss.entranceElapsed, s.time.now]),
+        'Mubarak and clock freeze, and the Enter repeat is ignored');
+       enter();
+       s.update(undefined, 10);
+       check(!s.sys.isPaused() && !s.pauseMessage.visible && boss.entranceElapsed === 10,
+        'Mubarak resumes at the same point in the entrance');
+      }
       boss.update(M.MubarakSettings.entranceMs);
       for(let i=0;i<4;i++){check(boss.hit(),'original diamond damage');if(i<3)boss.update(800);}
       check(boss.phase==='clearing'&&boss.frame===5&&!s.playerShootingEnabled,'V1 freeze preserved');boss.update(0);boss.update(135);
@@ -157,6 +291,6 @@ async function serve(route) {
    },renderer));
   }
   assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'boss-schedule-browser.json'),JSON.stringify(reports,null,2));
-  console.log('PASS: Canvas/WebGL Wave1->Mubarak->2, restored ordinary Wave1->2; Wojak/Mubarak victories10->11,20->21,30->31,40->41,50->51,60->61; parity through10000, no duplicates, delay/bullet gates, scoring/lives/Premium unlock, yellow assets/V1 mechanics, game over and restart.');
+  console.log('PASS: Canvas/WebGL WASD, arrows, mixed diagonals, opposite-key cancellation and scroll capture; normal wave, transition and Mubarak pause/resume; HUD boundary and shooting; all four formation invasion losses; Wave20->Mubarak->21.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
